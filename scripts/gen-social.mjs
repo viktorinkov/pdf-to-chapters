@@ -55,8 +55,13 @@ try {
   // 192x192 + 512x512: PWA / Android Chrome home-screen icon (manifest).
   await render("icon-card.html", "icon-192.png", 192, 192);
   await render("icon-card.html", "icon-512.png", 512, 512);
-  // Favicons keep using the existing favicon.svg — at 16-32px the wordmark
-  // is illegible and the walnut-shape SVG is a better tiny mark anyway.
+
+  // PNG favicons rendered from the same wordmark, at the sizes browsers
+  // actually request for tabs / address bar. Modern browsers prefer the
+  // SVG, but these are the fallback for older browsers and contexts that
+  // need a raster.
+  await render("icon-card.html", "favicon-32.png", 32, 32);
+  await render("icon-card.html", "favicon-48.png", 48, 48);
 
   console.log("done.");
 } finally {
