@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>walnut &mdash; chapter bookmarks for PDFs, locally</title>
+  <meta name="description" content="walnut adds chapter bookmarks to PDFs using a local LLM. No cloud, no account. Built by Viktor Minchev.">
+  <meta name="color-scheme" content="light dark">
+  <meta property="og:title" content="walnut">
+  <meta property="og:description" content="add chapter bookmarks to PDFs using a local LLM, on your machine.">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="walnut home">
+      walnut<span class="dot" aria-hidden="true"></span>
+    </a>
+    <nav class="nav" aria-label="primary">
+      <a href="#how">how it works</a>
+      <a href="#why">why local</a>
+      <a href="#install">install</a>
+      <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">github</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-grid">
+        <div class="hero-text">
+          <h1 class="display">
+            <span class="reveal-line"><span>chapter bookmarks</span></span>
+            <span class="reveal-line"><span>for PDFs</span></span>
+            <span class="reveal-line accent"><span>that don&rsquo;t have any.</span></span>
+          </h1>
+          <p class="lede reveal">
+            walnut reads a PDF, figures out where the chapters start, and writes a proper outline back into a copy of the file. it runs entirely on your machine.
+          </p>
+          <div class="cta-row reveal">
+            <button class="copy" type="button" data-copy="uvx walnut" aria-label="copy install command">
+              <code>uvx walnut</code>
+              <span class="copy-state" data-state="idle">copy</span>
+            </button>
+            <a class="ghost" href="#how">see how it works &rarr;</a>
+          </div>
+          <p class="muted small reveal">free, open source, no account, no cloud.</p>
+        </div>
+
+        <figure class="hero-illu reveal" aria-hidden="true">
+          <svg viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" class="flow">
+            <defs>
+              <linearGradient id="paper-grad" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="var(--shell)"/>
+                <stop offset="100%" stop-color="var(--paper)"/>
+              </linearGradient>
+            </defs>
+            <g class="pdf-in">
+              <rect x="32" y="72" width="100" height="140" rx="6" fill="url(#paper-grad)" stroke="var(--bark)" stroke-width="1.5"/>
+              <line x1="46" y1="96"  x2="118" y2="96"  stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="46" y1="112" x2="110" y2="112" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="46" y1="128" x2="118" y2="128" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="46" y1="148" x2="118" y2="148" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="46" y1="164" x2="100" y2="164" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="46" y1="180" x2="118" y2="180" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+            </g>
+            <g class="arrow">
+              <path d="M148 142 L172 142" stroke="var(--bark)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+              <path d="M168 138 L172 142 L168 146" stroke="var(--bark)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            </g>
+            <g class="walnut-orb">
+              <ellipse cx="195" cy="142" rx="18" ry="22" fill="var(--bark)"/>
+              <line x1="195" y1="120" x2="195" y2="164" stroke="var(--paper)" stroke-width="1" opacity=".55"/>
+            </g>
+            <g class="arrow">
+              <path d="M218 142 L242 142" stroke="var(--bark)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+              <path d="M238 138 L242 142 L238 146" stroke="var(--bark)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            </g>
+            <g class="pdf-out">
+              <rect x="252" y="72" width="100" height="140" rx="6" fill="url(#paper-grad)" stroke="var(--bark)" stroke-width="1.5"/>
+              <g class="bookmarks">
+                <rect x="248" y="92"  width="6" height="14" rx="1" fill="var(--bark)"/>
+                <rect x="248" y="116" width="6" height="14" rx="1" fill="var(--bark)"/>
+                <rect x="248" y="140" width="6" height="14" rx="1" fill="var(--sap)"/>
+                <rect x="248" y="164" width="6" height="14" rx="1" fill="var(--bark)"/>
+                <rect x="248" y="188" width="6" height="14" rx="1" fill="var(--sap)"/>
+              </g>
+              <line x1="270" y1="96"  x2="338" y2="96"  stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="270" y1="112" x2="332" y2="112" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="270" y1="128" x2="338" y2="128" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="270" y1="148" x2="338" y2="148" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="270" y1="164" x2="324" y2="164" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+              <line x1="270" y1="180" x2="338" y2="180" stroke="var(--bark)" stroke-width="1" opacity=".4"/>
+            </g>
+          </svg>
+          <figcaption class="cap mono">pdf  &rarr;  walnut  &rarr;  pdf with bookmarks</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="how" class="how">
+      <h2 class="section-title">how it works</h2>
+      <ol class="steps">
+        <li class="step reveal">
+          <div class="step-num mono">01</div>
+          <h3>drop a PDF in your browser</h3>
+          <p>walnut runs as a tiny local web app. open <code class="mono">http://localhost</code>, drag any PDF in &mdash; book, paper, scanned report &mdash; and it starts reading.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step-num mono">02</div>
+          <h3>detect chapters with a local model</h3>
+          <p>if the PDF has a printed Table of Contents, walnut parses it directly. otherwise it asks Gemma 4, running locally via Ollama, to infer chapter boundaries from the text and font sizes.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step-num mono">03</div>
+          <h3>review, then save</h3>
+          <p>before anything is written, walnut shows you the detected chapters. rename, nudge a page number, delete a bogus one, or accept and download. the output is byte-identical to your input apart from the appended outline.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="why" class="why">
+      <h2 class="section-title">why local</h2>
+      <div class="why-grid">
+        <article class="card reveal">
+          <h3>your PDFs never leave your machine.</h3>
+          <p>no upload to a server, no third-party API, no analytics. walnut spawns a Python process bound to <code class="mono">127.0.0.1</code>. that&rsquo;s the entire surface area.</p>
+        </article>
+        <article class="card reveal">
+          <h3>built on Ollama and Gemma 4.</h3>
+          <p>Gemma 4&rsquo;s 4B effective-parameter model fits in 16&nbsp;GB of RAM and runs at 18&ndash;24 tokens per second on Apple Silicon via the MLX backend.</p>
+        </article>
+        <article class="card reveal">
+          <h3>byte-equivalent output.</h3>
+          <p>the saved file is the original input plus an appended PDF incremental update. signatures stay valid; nothing else in the file changes.</p>
+        </article>
+        <article class="card reveal">
+          <h3>open source.</h3>
+          <p>read the source, file an issue, send a patch. MIT licensed code on <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="install" class="install-block">
+      <h2 class="section-title">install</h2>
+      <p class="install-lede">walnut needs Python 3.12+ and an Ollama daemon. on macOS:</p>
+      <pre class="codeblock reveal" tabindex="0"><code class="mono">brew install ollama
+brew services start ollama
+ollama pull gemma4:e4b
+
+uvx walnut</code></pre>
+      <p class="muted small">first run pulls a ~9.6&nbsp;GB model. after that it&rsquo;s instant.</p>
+    </section>
+
+    <section id="about" class="about">
+      <h2 class="section-title">about</h2>
+      <p class="big">
+        walnut is a one-person side project. it exists because a lot of book PDFs ship without an outline, and reading a 600-page novel without bookmarks is no fun.
+      </p>
+      <p class="muted">
+        built by <a href="https://www.linkedin.com/in/viktor-minchev/" target="_blank" rel="noopener noreferrer">Viktor Minchev</a>. source on <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">GitHub</a>.
+      </p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>walnut</span>
+    <span class="sep">&middot;</span>
+    <span>built by <a href="https://www.linkedin.com/in/viktor-minchev/" target="_blank" rel="noopener noreferrer">Viktor Minchev</a></span>
+  </footer>
+
+  <script>
+    (function () {
+      var io;
+      if ("IntersectionObserver" in window) {
+        io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              e.target.classList.add("in");
+              io.unobserve(e.target);
+            }
+          });
+        }, { rootMargin: "-8% 0px -8% 0px", threshold: 0.05 });
+        document.querySelectorAll(".reveal, .step").forEach(function (el) { io.observe(el); });
+      } else {
+        document.querySelectorAll(".reveal, .step").forEach(function (el) { el.classList.add("in"); });
+      }
+
+      document.querySelectorAll("[data-copy]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var text = btn.getAttribute("data-copy") || "";
+          var label = btn.querySelector(".copy-state");
+          var done = function () {
+            if (!label) return;
+            label.textContent = "copied";
+            label.setAttribute("data-state", "ok");
+            setTimeout(function () {
+              label.textContent = "copy";
+              label.setAttribute("data-state", "idle");
+            }, 1400);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(done);
+          } else {
+            var ta = document.createElement("textarea");
+            ta.value = text; document.body.appendChild(ta);
+            ta.select(); try { document.execCommand("copy"); } catch (_) {}
+            document.body.removeChild(ta); done();
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
