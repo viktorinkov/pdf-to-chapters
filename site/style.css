@@ -288,6 +288,393 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   to   { opacity: 1; transform: translateX(0); }
 }
 
+/* ---------- topbar status pill ---------- */
+.pill {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in oklab, var(--shell) 60%, transparent);
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+  white-space: nowrap;
+}
+.pill.ok {
+  border-color: color-mix(in oklab, var(--moss) 40%, var(--hairline));
+  color: var(--moss);
+  background: color-mix(in oklab, var(--moss) 8%, var(--paper));
+}
+.pill.bad {
+  border-color: color-mix(in oklab, var(--amber) 45%, var(--hairline));
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 8%, var(--paper));
+}
+@media (max-width: 640px) {
+  .pill { display: none; }
+}
+
+/* ---------- the walnut app (hero half) ---------- */
+.walnut-app {
+  position: relative;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: stretch;
+  overflow: hidden;
+}
+
+/* Five-screen container: only one .on at a time. Cross-fade the rest. */
+.walnut-app .screen {
+  display: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.walnut-app .screen.on {
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  animation: screen-in 220ms ease both;
+}
+@keyframes screen-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---------- dropzone ---------- */
+.dropzone {
+  border: 1.5px dashed color-mix(in oklab, var(--bark) 45%, var(--hairline));
+  border-radius: 10px;
+  padding: 36px 22px;
+  text-align: center;
+  cursor: pointer;
+  background: color-mix(in oklab, var(--shell) 38%, var(--paper));
+  color: var(--ink);
+  transition: transform 140ms ease, border-color 160ms ease, background 200ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  outline: none;
+  animation: dz-pulse 4s ease-in-out infinite;
+}
+.dropzone:hover,
+.dropzone:focus-visible {
+  transform: scale(1.01);
+  border-color: var(--bark);
+  background: color-mix(in oklab, var(--shell) 60%, var(--paper));
+}
+.dropzone:focus-visible { outline: 2px solid var(--bark); outline-offset: 4px; }
+.dropzone.hover {
+  transform: scale(1.015);
+  border-color: var(--bark);
+  border-style: solid;
+  background: color-mix(in oklab, var(--shell) 75%, var(--paper));
+}
+.dropzone-art {
+  color: var(--bark);
+  opacity: 0.85;
+}
+.dropzone-title {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  margin: 4px 0 0;
+}
+.dropzone-sub {
+  margin: 0;
+  font-size: 0.82rem;
+  color: color-mix(in oklab, var(--ink) 65%, transparent);
+}
+.walnut-hint {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 0.78rem;
+  color: color-mix(in oklab, var(--ink) 60%, transparent);
+}
+
+@keyframes dz-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--bark) 0%, transparent); }
+  50%      { box-shadow: 0 0 0 8px color-mix(in oklab, var(--bark) 6%, transparent); }
+}
+
+/* ---------- progress bar with shimmer ---------- */
+.run-name {
+  margin: 0 0 14px;
+  font-size: 0.92rem;
+  color: color-mix(in oklab, var(--ink) 80%, transparent);
+  word-break: break-word;
+}
+.bar {
+  width: 100%;
+  height: 8px;
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--bark), var(--sap));
+  border-radius: 4px;
+  transition: width 220ms ease;
+  position: relative;
+}
+.bar-fill::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--paper) 60%, transparent) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%);  }
+}
+.status {
+  margin: 12px 0 4px;
+  font-size: 0.86rem;
+  color: color-mix(in oklab, var(--ink) 78%, transparent);
+  min-height: 1.4em;
+}
+
+/* ---------- preview screen ---------- */
+.preview-head {
+  margin-bottom: 14px;
+}
+.preview-title {
+  font-family: var(--serif);
+  font-size: 1.18rem;
+  margin: 0 0 4px;
+}
+.preview-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: color-mix(in oklab, var(--ink) 65%, transparent);
+}
+.preview-meta .sep { opacity: 0.5; margin: 0 4px; }
+
+.callout {
+  display: none;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  margin: 0 0 14px;
+  border: 1px solid transparent;
+}
+.callout.warn {
+  background: color-mix(in oklab, var(--amber) 14%, var(--paper));
+  border-color: color-mix(in oklab, var(--amber) 35%, var(--hairline));
+  color: color-mix(in oklab, var(--amber) 80%, var(--ink));
+}
+.callout.on { display: block; animation: warn-in 240ms ease both; }
+@keyframes warn-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- chapter list ---------- */
+.chapter-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--paper) 92%, var(--shell));
+}
+.chapter-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  border-left: 3px solid transparent;
+  background: var(--paper);
+  opacity: 0;
+  transform: translateY(4px);
+  animation: row-in 320ms ease both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+.chapter-row:last-child { border-bottom: none; }
+.chapter-row.level-2 { padding-left: 28px; }
+.chapter-row.level-3 { padding-left: 44px; }
+.chapter-row.low-conf {
+  border-left-color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 4%, var(--paper));
+}
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chapter-title {
+  font: inherit;
+  font-size: 0.94rem;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.chapter-title:focus {
+  outline: none;
+  background: color-mix(in oklab, var(--bark) 8%, transparent);
+}
+.chapter-page {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+}
+.page-num {
+  min-width: 2.4ch;
+  text-align: center;
+}
+.row-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline);
+  background: var(--paper);
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 80ms ease;
+}
+.row-btn:hover { border-color: var(--bark); background: color-mix(in oklab, var(--shell) 60%, var(--paper)); }
+.row-btn:active { transform: scale(0.96); }
+.row-btn.del {
+  color: var(--rust);
+}
+.row-btn.del:hover {
+  border-color: var(--rust);
+  background: color-mix(in oklab, var(--rust) 8%, var(--paper));
+}
+
+/* ---------- buttons ---------- */
+.preview-actions, .err-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.btn {
+  font: inherit;
+  font-size: 0.94rem;
+  padding: 10px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  background: var(--shell);
+  color: var(--ink);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px solid var(--hairline);
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 160ms ease;
+}
+.btn:hover { transform: translateY(-1px); border-color: var(--bark); }
+.btn:focus-visible { outline: 2px solid var(--bark); outline-offset: 2px; }
+.btn.primary {
+  background: var(--bark);
+  color: var(--paper);
+  border-color: var(--bark);
+}
+.btn.primary:hover { background: color-mix(in oklab, var(--bark) 88%, var(--ink)); }
+.btn.ghost-btn {
+  background: transparent;
+  border-color: var(--hairline);
+  color: color-mix(in oklab, var(--ink) 80%, transparent);
+}
+
+/* AI buttons: subdued in preview, prominent (with pulse) in error. */
+.btn.ai {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--bark) 60%, var(--hairline));
+  color: var(--bark);
+  background: color-mix(in oklab, var(--bark) 4%, var(--paper));
+}
+.btn.ai.subdued {
+  font-size: 0.86rem;
+  padding: 8px 12px;
+}
+.btn.ai.prominent {
+  background: var(--bark);
+  color: var(--paper);
+  border-style: solid;
+  border-color: var(--bark);
+  animation: ai-pulse 2.4s ease-in-out infinite;
+}
+.btn.ai.prominent:hover { background: color-mix(in oklab, var(--bark) 88%, var(--ink)); }
+.btn.disabled, .btn[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+  animation: none;
+}
+@keyframes ai-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--bark) 0%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--bark) 14%, transparent); }
+}
+
+.ai-note {
+  display: none;
+  margin: 10px 0 0;
+}
+.ai-note.on { display: block; }
+
+/* ---------- done & error screens ---------- */
+.done-mark, .err-mark {
+  align-self: flex-start;
+  margin-bottom: 10px;
+}
+.done-mark { color: var(--moss); }
+.err-mark  { color: var(--rust); }
+.done-title, .err-title {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  margin: 0 0 6px;
+}
+.done-line {
+  margin: 0 0 18px;
+  font-size: 0.94rem;
+  color: color-mix(in oklab, var(--ink) 78%, transparent);
+  word-break: break-word;
+}
+.done-name {
+  display: inline-block;
+  padding: 1px 6px;
+  background: color-mix(in oklab, var(--moss) 12%, transparent);
+  border-radius: 3px;
+  color: var(--moss);
+}
+.err-text {
+  margin: 0 0 18px;
+  color: color-mix(in oklab, var(--ink) 80%, transparent);
+}
+
+/* Hero grid: app on the right, copy on the left. */
+.hero-grid > .walnut-app { width: 100%; max-width: 540px; justify-self: end; }
+@media (max-width: 760px) {
+  .hero-grid > .walnut-app { max-width: none; justify-self: stretch; }
+  .hero { padding-bottom: 32px; }
+}
+
+/* ---------- prefers-reduced-motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0ms !important;
@@ -297,4 +684,7 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   }
   .reveal, .step { opacity: 1 !important; transform: none !important; }
   .reveal-line > span { transform: none !important; }
+  .dropzone, .btn.ai.prominent, .bar-fill::after { animation: none !important; }
+  .chapter-row { opacity: 1 !important; transform: none !important; }
+  .walnut-app .screen.on { animation: none !important; }
 }

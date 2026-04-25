@@ -1,0 +1,14 @@
+{
+  "name": "walnut-browser-test",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Node-side smoke test for walnut's browser pipeline.",
+  "scripts": {
+    "test:browser": "node scripts/test_browser.mjs"
+  },
+  "devDependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "5.6.205"
+  }
+}
