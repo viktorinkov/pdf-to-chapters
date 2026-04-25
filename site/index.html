@@ -51,7 +51,13 @@
     <a class="brand" href="./" aria-label="walnut home">
       walnut<span class="dot" aria-hidden="true"></span>
     </a>
-    <nav class="nav" aria-label="primary">
+    <button type="button" class="nav-toggle" data-walnut="nav-toggle"
+            aria-controls="primary-nav" aria-expanded="false" aria-label="menu">
+      <span class="bar" aria-hidden="true"></span>
+      <span class="bar" aria-hidden="true"></span>
+      <span class="bar" aria-hidden="true"></span>
+    </button>
+    <nav class="nav" id="primary-nav" data-walnut="nav" aria-label="primary">
       <a href="#how">how it works</a>
       <a href="#why">why local</a>
       <a href="#tech">tech</a>
@@ -296,6 +302,44 @@ uvx --from git+https://github.com/viktorinkov/pdf-to-chapters walnut</code></pre
       } else {
         document.querySelectorAll(".reveal, .step").forEach(function (el) { el.classList.add("in"); });
       }
+    })();
+  </script>
+
+  <!-- Mobile nav toggle. -->
+  <script>
+    (function () {
+      var btn = document.querySelector('[data-walnut="nav-toggle"]');
+      var nav = document.querySelector('[data-walnut="nav"]');
+      if (!btn || !nav) return;
+      function close() {
+        btn.setAttribute("aria-expanded", "false");
+        nav.classList.remove("open");
+      }
+      function open() {
+        btn.setAttribute("aria-expanded", "true");
+        nav.classList.add("open");
+      }
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        if (btn.getAttribute("aria-expanded") === "true") close(); else open();
+      });
+      // Tap a nav link -> close the panel.
+      nav.addEventListener("click", function (e) {
+        if (e.target.closest("a")) close();
+      });
+      // Tap outside -> close.
+      document.addEventListener("click", function (e) {
+        if (!nav.contains(e.target) && !btn.contains(e.target)) close();
+      });
+      // Escape -> close.
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") close();
+      });
+      // Returning to desktop width -> close (avoids the dropdown lingering
+      // open if the user rotates / resizes from a stuck-open state).
+      window.matchMedia("(min-width: 641px)").addEventListener("change", function (m) {
+        if (m.matches) close();
+      });
     })();
   </script>
 

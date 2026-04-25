@@ -83,6 +83,42 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 .nav a { border-bottom: none; opacity: 0.78; }
 .nav a:hover { opacity: 1; color: var(--bark); }
 
+/* The hamburger is hidden on desktop and only renders below 640px (where
+   the inline nav links don't fit). The three bars rotate into an X when
+   the menu opens. */
+.nav-toggle {
+  display: none;
+  width: 36px; height: 36px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  color: var(--ink);
+}
+.nav-toggle:hover { border-color: var(--hairline); }
+.nav-toggle:focus-visible { outline: 2px solid var(--bark); outline-offset: 2px; }
+.nav-toggle .bar {
+  position: absolute;
+  left: 8px;
+  width: 20px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 2px;
+  transition: transform 200ms ease, opacity 150ms ease, top 200ms ease;
+}
+.nav-toggle .bar:nth-child(1) { top: 12px; }
+.nav-toggle .bar:nth-child(2) { top: 17.25px; }
+.nav-toggle .bar:nth-child(3) { top: 22.5px; }
+.nav-toggle[aria-expanded="true"] .bar:nth-child(1) { top: 17.25px; transform: rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .bar:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] .bar:nth-child(3) { top: 17.25px; transform: rotate(-45deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-toggle .bar { transition: none; }
+}
+
 /* ---------- hero ---------- */
 .hero { padding: clamp(40px, 9vw, 96px) clamp(20px, 5vw, 56px) clamp(40px, 9vw, 96px); }
 .hero-grid {
@@ -343,7 +379,61 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   background: color-mix(in oklab, var(--amber) 8%, var(--paper));
 }
 @media (max-width: 640px) {
-  .pill { display: none; }
+  /* Hamburger replaces the inline nav. */
+  .nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+
+  /* The nav becomes a full-width dropdown panel that slides down below the
+     topbar. The topbar itself becomes the positioning context. */
+  .topbar { position: relative; }
+  .nav {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 6px 0 8px;
+    margin: 0;
+    background: var(--paper);
+    border-bottom: 1px solid var(--hairline);
+    box-shadow: var(--shadow);
+    transform-origin: top;
+    transform: scaleY(0.98) translateY(-4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 200ms ease, opacity 160ms ease;
+    z-index: 12;
+  }
+  .nav.open {
+    transform: scaleY(1) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .nav a {
+    padding: 14px clamp(20px, 5vw, 56px);
+    font-size: 1rem;
+    opacity: 1;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .nav a:last-of-type { border-bottom: none; }
+  /* The model picker ("pill") shows up inside the mobile menu so users can
+     still pick a Gemma — the desktop-only single-line rule that hid it
+     entirely below 640px is replaced by the row treatment here. */
+  .nav .pill {
+    display: flex;
+    align-self: stretch;
+    margin: 8px clamp(20px, 5vw, 56px) 4px;
+    padding: 0;
+    width: auto;
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--shell) 60%, transparent);
+  }
+  .nav .pill select { padding: 12px 32px 12px 14px; font-size: 0.95rem; width: 100%; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav { transition: none; }
+  }
 }
 
 /* The pill is now a wrapper around a native <select>; the select inherits
