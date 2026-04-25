@@ -23,6 +23,7 @@
     <nav class="nav" aria-label="primary">
       <a href="#how">how it works</a>
       <a href="#why">why local</a>
+      <a href="#tech">tech</a>
       <a href="#install">install</a>
       <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">github</a>
       <span class="pill" data-walnut="webgpu-pill" aria-live="polite">WebGPU: checking&hellip;</span>
@@ -194,6 +195,25 @@
           <p>read the source, file an issue, send a patch. MIT licensed code on <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">GitHub</a>. no analytics, no third-party scripts, no cookies.</p>
         </article>
       </div>
+    </section>
+
+    <section id="tech" class="tech">
+      <h2 class="section-title">what&rsquo;s under the hood</h2>
+      <p class="tech-lede">walnut detects chapters in three passes: a regex over a printed Table of Contents page (dot leaders + right-aligned page numbers), a font-size heading heuristic for books without one, and an opt-in local AI pass for the rest. all three run in your browser; nothing is uploaded.</p>
+      <ul class="tech-stack">
+        <li>
+          <strong><a href="https://github.com/mozilla/pdf.js" target="_blank" rel="noopener noreferrer">PDF.js&nbsp;5.6</a></strong>
+          <span class="muted"> &mdash; Mozilla&rsquo;s PDF parser. reads per-page text plus per-line font size and position so the heuristic can spot heading-sized lines.</span>
+        </li>
+        <li>
+          <strong><a href="https://github.com/Hopding/pdf-lib" target="_blank" rel="noopener noreferrer">pdf-lib&nbsp;1.17</a></strong>
+          <span class="muted"> &mdash; fallback writer for PDFs whose catalog is hidden inside a compressed object stream. the default path is a hand-rolled <a href="https://developers.foxit.com/developer-hub/document/incremental-updates/" target="_blank" rel="noopener noreferrer">PDF incremental update</a> so the output is byte-identical to the input plus an appended outline section.</span>
+        </li>
+        <li>
+          <strong><a href="https://github.com/mlc-ai/web-llm" target="_blank" rel="noopener noreferrer">WebLLM</a> + <a href="https://ai.google.dev/gemma" target="_blank" rel="noopener noreferrer">Gemma&nbsp;2&nbsp;(2B,&nbsp;4-bit)</a></strong>
+          <span class="muted"> &mdash; runs in your browser via WebGPU when neither the TOC parser nor the font heuristic finds anything. ~1.5&nbsp;GB one-time download cached locally; no API key, no server. the desktop version uses <a href="https://deepmind.google/models/gemma/" target="_blank" rel="noopener noreferrer">Gemma&nbsp;4 (E4B)</a> via Ollama for higher quality.</span>
+        </li>
+      </ul>
     </section>
 
     <section id="install" class="install-block">

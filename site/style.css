@@ -121,7 +121,17 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 .ghost:hover { opacity: 1; color: var(--bark); }
 
 /* ---------- hero reveal animations ---------- */
-.reveal-line { display: block; overflow: hidden; }
+.reveal-line {
+  display: block;
+  overflow: hidden;
+  /* h1.display runs at line-height: 1.05 for tight typography, but descenders
+     ("y" in "your", "p" in "chapter") sit below the line box and get clipped
+     by overflow: hidden. Pad the bottom of each line so descenders have
+     room, then claw the space back with a matching negative margin so the
+     vertical rhythm is unchanged. */
+  padding-bottom: 0.18em;
+  margin-bottom: -0.18em;
+}
 .reveal-line > span {
   display: inline-block;
   transform: translateY(110%);
@@ -161,7 +171,22 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 .cap { color: color-mix(in oklab, var(--ink) 55%, transparent); font-size: 0.78rem; letter-spacing: 0.02em; }
 
 /* ---------- how it works ---------- */
-.how, .why, .install-block, .about { padding: clamp(44px, 7vw, 96px) clamp(20px, 5vw, 56px); border-top: 1px solid var(--hairline); }
+.how, .why, .install-block, .about, .tech { padding: clamp(44px, 7vw, 96px) clamp(20px, 5vw, 56px); border-top: 1px solid var(--hairline); }
+
+.tech .section-title,
+.tech .tech-lede,
+.tech .tech-stack { max-width: 1100px; margin-left: auto; margin-right: auto; }
+.tech .tech-lede { color: color-mix(in oklab, var(--ink) 78%, transparent); margin-top: 0; margin-bottom: 1.6rem; max-width: 56rem; }
+.tech-stack { list-style: none; padding: 0; }
+.tech-stack li {
+  padding: 0.95rem 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.98rem;
+  line-height: 1.55;
+}
+.tech-stack li:last-child { border-bottom: none; }
+.tech-stack strong { font-weight: 500; color: var(--ink); }
+.tech-stack a { font-weight: 500; }
 .how { background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--shell) 30%, transparent)); }
 
 .steps {
