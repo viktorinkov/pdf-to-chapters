@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "walnut"
+version = "0.0.1"
+description = "Add chapter bookmarks to a PDF using a local LLM."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "Viktor Minchev"}]
+license = {text = "MIT"}
+keywords = ["pdf", "outline", "bookmarks", "ollama", "gemma", "local-llm"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Web Environment",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business",
+  "Topic :: Text Processing",
+]
+
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sse-starlette>=2.1",
+  "python-multipart>=0.0.12",
+  "httpx>=0.28",
+  "pymupdf>=1.27",
+  "pikepdf>=10.5",
+  "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.7",
+  "mypy>=1.13",
+]
+ocr = [
+  "ocrmypdf>=17.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/viktorminchev/walnut"
+
+[project.scripts]
+walnut = "walnut.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["walnut"]
+include = ["walnut/web/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/walnut", "/tests", "/README.md", "/PLAN.md", "/docs"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ARG"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
