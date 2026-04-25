@@ -21,9 +21,9 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { PDFDocument, PDFName } from "pdf-lib";
 
-import { buildFixturePDF, buildBookmarkedFixturePDF, makeLargeFixturePDF } from "./fixtures.mjs";
+import { buildFixturePDF, buildBookmarkedFixturePDF, makeLargeFixturePDF, getRealWorldPDF } from "./fixtures.mjs";
 
-const APP_URL = "https://viktorinkov.github.io/pdf-to-chapters/";
+const APP_URL = process.env.WALNUT_APP_URL || "https://viktorinkov.github.io/pdf-to-chapters/";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -340,6 +340,127 @@ test.describe("walnut e2e", () => {
     expect(
       errors.filter(e => !/standardFontDataUrl/i.test(e.text || "")),
       `console errors during large upload:\n${errors.map(e => `- ${e.text}`).join("\n")}`,
+    ).toHaveLength(0);
+  });
+
+  // Real-world PDF integration test.
+  //
+  // Every other test in this file uses a synthetic fixture (12-page book or
+  // ~8 MB procedurally generated book). That covers the writer + detector on
+  // PDFs we control end-to-end, but doesn't tell us whether the pipeline
+  // copes with a PDF we did NOT generate — i.e., real publishing tooling,
+  // real font subsetting, real cross-reference tables, and a real printed
+  // TOC layout that pdf.js extracts in non-trivial ways.
+  //
+  // We use USGS Circular 1268 "Estimated Use of Water in the United States
+  // in 2000". See fixtures.mjs::REAL_PDF_URL for the rationale and
+  // properties (public-domain US gov work, 52 pages, ~5.8 MB, traditional
+  // xref table so the incremental writer can walk its page tree). Bytes are
+  // sha256-pinned + cached under tests/e2e/.cache/ (gitignored) so the
+  // first run downloads + validates and every subsequent run hits the
+  // cache. If USGS republishes with different bytes the test fails fast on
+  // the sha mismatch, which is the right failure mode (we want to know
+  // before the test silently starts asserting against new content).
+  test("real-world PDF: upload, detect chapters, save, verify outline", async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = attachConsoleWatcher(page);
+
+    // 1) Get the real PDF (cache hit on every run after the first).
+    const bytes = await getRealWorldPDF();
+    const fixturePath = path.join(scratchDir, "real-world.pdf");
+    await fs.writeFile(fixturePath, bytes);
+    const inputBytes = await fs.readFile(fixturePath);
+    const inputLen = inputBytes.byteLength;
+
+    // 2) Drive the live URL through the full upload + detect flow.
+    await page.goto(APP_URL);
+    await expect(page.locator('input[data-walnut="filepicker"]')).toHaveCount(1);
+    await page.setInputFiles('input[data-walnut="filepicker"]', fixturePath);
+
+    // pdf.js text extraction over 52 pages plus chapter detection takes a few
+    // seconds; bump the preview-screen wait above the default 30 s for safety.
+    const previewScreen = page.locator('section[data-screen="preview"]');
+    await expect(previewScreen).toHaveClass(/(?:^|\s)on(?:\s|$)/, { timeout: 60_000 });
+    await expect(previewScreen).toBeVisible();
+
+    // 3) The detector should land on the printed TOC and surface chapters.
+    const rows = previewScreen.locator(".chapter-row");
+    const chapterCount = await rows.count();
+    // Any real publication with a printed TOC will produce well over 3
+    // entries; USGS Circular 1268 has ~19 entries on its single Contents
+    // page. We assert a generous lower bound so trivial regressions in the
+    // regex are caught without coupling the test to the exact USGS layout.
+    expect(
+      chapterCount,
+      `expected >= 3 chapters from a real-world TOC; got ${chapterCount}`,
+    ).toBeGreaterThanOrEqual(3);
+
+    // 4) The preview should report that the chapters came from a printed
+    // TOC (or fall back to page headings if the TOC pass missed). If the
+    // detector hits *neither* path the source string would be empty and
+    // this assertion catches that regression.
+    const sourceText = await page.locator('[data-walnut="preview-source"]').textContent();
+    expect(
+      sourceText,
+      `preview-source was: ${sourceText}`,
+    ).toMatch(/(detected from a printed Table of Contents|detected from page headings)/);
+
+    // 5) Trigger save and capture the download.
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 60_000 }),
+      page.locator('[data-walnut="save-btn"]').click(),
+    ]);
+
+    // The app prefixes the saved name with "walnut-"; we wrote the input as
+    // "real-world.pdf", so we expect "walnut-real-world.pdf".
+    expect(download.suggestedFilename()).toMatch(/^walnut-real-world\.pdf$/);
+    const savedPath = path.join(scratchDir, "real-world-out.pdf");
+    await download.saveAs(savedPath);
+
+    const outBytes = await fs.readFile(savedPath);
+
+    // 6) Output sanity: the incremental writer appends an /Outlines tree to
+    // the original bytes, so the output must be at least as big as the
+    // input (it's strictly bigger by the size of the appended tree).
+    expect(
+      outBytes.byteLength,
+      `output too small: ${outBytes.byteLength}, input was ${inputLen}`,
+    ).toBeGreaterThan(inputLen);
+
+    // 7) Byte-prefix preservation — the load-bearing assertion for the
+    // incremental writer. The first inputLen bytes of the output must be
+    // exactly the input bytes (the writer appends an incremental update
+    // section instead of re-serialising the whole document).
+    const prefixMatches = outBytes.length >= inputLen
+      && Buffer.from(outBytes.subarray(0, inputLen)).equals(inputBytes);
+    expect(
+      prefixMatches,
+      "incremental writer must preserve the original bytes as a prefix",
+    ).toBe(true);
+
+    // 8) Reload the output with pdf-lib and assert the /Outlines tree:
+    //    - the catalog references /Outlines
+    //    - the outlines root's /Count matches the chapter count we observed
+    //      in the preview screen (the writer's Count is total visible
+    //      descendants = total nodes when everything is open)
+    const reread = await PDFDocument.load(outBytes);
+    const outlinesRef = reread.catalog.get(PDFName.of("Outlines"));
+    expect(outlinesRef, "downloaded PDF must have /Outlines in catalog").toBeDefined();
+    expect(outlinesRef).not.toBeNull();
+    const outlinesDict = reread.context.lookup(outlinesRef);
+    expect(outlinesDict, "/Outlines must resolve to a dict").not.toBeNull();
+    const outlinesCount = outlinesDict.get(PDFName.of("Count"));
+    const num = outlinesCount && typeof outlinesCount.asNumber === "function"
+      ? outlinesCount.asNumber()
+      : null;
+    expect(num).toBe(chapterCount);
+
+    // 9) No console errors should fire during the real-world flow. We
+    // tolerate the standardFontDataUrl warning that pdf.js emits at load
+    // because some PDFs reference standard 14 fonts without embedding them.
+    expect(
+      errors.filter(e => !/standardFontDataUrl/i.test(e.text || "")),
+      `console errors during real-world upload:\n${errors.map(e => `- ${e.text}`).join("\n")}`,
     ).toHaveLength(0);
   });
 });

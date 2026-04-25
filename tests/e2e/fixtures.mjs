@@ -10,6 +10,13 @@
 // structure are stable across runs.
 
 import { PDFDocument, StandardFonts, PDFName, PDFArray, PDFHexString, PDFNumber, PDFDict } from "pdf-lib";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Build a 12-page PDF with:
@@ -401,4 +408,71 @@ export async function makeLargeFixturePDF(targetMB = 8) {
     sizeMB: bytes.byteLength / (1024 * 1024),
     chapters,
   };
+}
+
+// ---- real-world PDF fixture ------------------------------------------------
+//
+// We close the synthetic-fixture gap by validating walnut against a real
+// public-domain publication: USGS Circular 1268, "Estimated Use of Water in
+// the United States in 2000" (Hutson et al., 2004). This document is:
+//   - public domain (US government work, 17 U.S.C. § 105)
+//   - hosted on the stable pubs.usgs.gov long-term archive
+//   - 52 pages, ~5.8 MB — fast to process, small enough to cache
+//   - has a single Contents page (page 5) with proper dot leaders and arabic
+//     page numbers, exactly the shape the TOC_LINE_RE regex was designed for
+//   - PDF 1.5 with a traditional cross-reference table (NO /Type /XRef
+//     streams and NO /Type /ObjStm compressed object streams)
+//
+// The "no compressed object streams" property is load-bearing: as of
+// April 2026 the deployed writeOutlineIncremental walks the page tree by
+// regex-scanning the bytes for "<num> <gen> obj" markers, so PDFs that
+// hide their /Pages object inside a compressed ObjStm cause the writer to
+// throw "no pages found in PDF" and fall back to pdf-lib (which re-emits
+// the file from scratch and therefore breaks byte-prefix preservation).
+// Modern NIST publications, for example, all use ObjStm; we avoided them
+// for that reason. If/when the incremental writer learns to follow refs
+// into ObjStm, this test could be retargeted at any modern publication.
+//
+// The sha256 below is pinned so we can detect a USGS republication that
+// would invalidate the test's expectations.
+export const REAL_PDF_URL = "https://pubs.usgs.gov/circ/2004/circ1268/pdf/circular1268.pdf";
+export const REAL_PDF_SHA256 = "02d02bc67cb0eeef669ddbce0f5e3b328e7cc376af61a3c715ba57d01f963d98";
+
+/**
+ * Fetch (and cache) the real-world PDF fixture used by the live-URL e2e test.
+ *
+ * On first run the bytes are downloaded from REAL_PDF_URL, sha256-verified
+ * against REAL_PDF_SHA256, and written to tests/e2e/.cache/<sha>.pdf. On
+ * subsequent runs the cache hit returns immediately without hitting the
+ * network. The cache directory is gitignored so we don't ship the PDF.
+ *
+ * @returns {Promise<Uint8Array>}
+ */
+export async function getRealWorldPDF() {
+  const cacheDir = path.join(__dirname, ".cache");
+  await fs.mkdir(cacheDir, { recursive: true });
+  const hashPath = path.join(cacheDir, REAL_PDF_SHA256 + ".pdf");
+  try {
+    const cached = await fs.readFile(hashPath);
+    return new Uint8Array(cached);
+  } catch (_) {
+    // fall through to download
+  }
+
+  const r = await fetch(REAL_PDF_URL, {
+    headers: { "User-Agent": "walnut-test (https://github.com/viktorinkov/pdf-to-chapters)" },
+  });
+  if (!r.ok) throw new Error(`fixture fetch failed: ${r.status} ${r.statusText}`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const got = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (got !== REAL_PDF_SHA256) {
+    throw new Error(
+      `fixture sha256 changed: expected ${REAL_PDF_SHA256}, got ${got}; ` +
+      `the upstream PDF at ${REAL_PDF_URL} was republished. ` +
+      `If the new bytes are intentional, update REAL_PDF_SHA256 after re-validating ` +
+      `that the printed TOC and chapter detection still match the test's expectations.`,
+    );
+  }
+  await fs.writeFile(hashPath, bytes);
+  return bytes;
 }

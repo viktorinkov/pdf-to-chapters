@@ -82,6 +82,14 @@ async function extractPages(arrayBuffer, onProgress, opts) {
   }
   const doc = await loadingTask.promise;
   const total = doc.numPages;
+  // The PDF's own page labels (e.g. "i".."xxiv", "1", "2", ...) when
+  // /PageLabels is set. With these, TOC entries can be resolved exactly
+  // instead of guessing the front-matter offset.
+  let pageLabels = null;
+  try {
+    const got = await doc.getPageLabels();
+    if (Array.isArray(got) && got.length === total) pageLabels = got;
+  } catch (_) {}
   const pages = [];
   try {
     for (let i = 1; i <= total; i++) {
@@ -122,7 +130,7 @@ async function extractPages(arrayBuffer, onProgress, opts) {
       const text = grouped.map(l => l.text).join("\n");
       pages.push({
         page_idx: i - 1,
-        page_label: String(i),
+        page_label: (pageLabels && pageLabels[i - 1]) || String(i),
         text,
         lines: grouped,
       });
@@ -139,19 +147,45 @@ async function extractPages(arrayBuffer, onProgress, opts) {
 }
 
 function groupByLine(items) {
-  // Bucket items by ~2pt y-tolerance: round to nearest even number to absorb
-  // small baseline jitter without merging two visually distinct lines.
+  // Bucket items by ~4pt y-tolerance. PDFs sometimes baseline-shift a
+  // right-aligned page number by 1-3pt vs the title in the same TOC row;
+  // tighter buckets split them onto separate lines and break TOC parsing.
   const buckets = new Map();
   for (const it of items) {
-    const key = Math.round(it.y / 2) * 2;
+    const key = Math.round(it.y / 4) * 4;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(it);
   }
   const lines = [];
   for (const [y, group] of buckets) {
     group.sort((a, b) => a.x - b.x);
-    const text = group.map(g => g.text).join("").replace(/\s+/g, " ").trim();
-    if (!text) continue;
+    // Join items using their x-position to recover word and column gaps.
+    // Without this, "It's", "your", "choice!" with no trailing spaces in the
+    // PDF stream collapses to "It'syourchoice!", and TOC entries like
+    // "1   OVERVIEW   3" lose the leader-gap that the dot/whitespace regex
+    // depends on.
+    let text = "";
+    let prevEnd = null;
+    for (const it of group) {
+      const itText = it.text;
+      if (prevEnd !== null) {
+        const gap = it.x - prevEnd;
+        const charW = Math.max(2, it.font_size * 0.4);
+        if (gap > charW * 1.5) {
+          // Column-sized gap: insert proportional whitespace so the dot-
+          // leader regex can match. Capped to avoid runaway lines.
+          const spaces = Math.min(40, Math.max(3, Math.round(gap / charW)));
+          text += " ".repeat(spaces);
+        } else if (gap > charW * 0.25) {
+          text += " ";
+        }
+      }
+      text += itText;
+      const itWidth = it.width || (itText.length * (it.font_size * 0.5));
+      prevEnd = it.x + itWidth;
+    }
+    text = text.replace(/[ \t]+$/, "");
+    if (!text.trim()) continue;
     const font_size = Math.max(...group.map(g => g.font_size));
     lines.push({ text, font_size, y, x: group[0].x });
   }
@@ -205,16 +239,24 @@ function parseTOC(tocPages, pages) {
 }
 
 function inferLevel(title) {
-  const m = title.match(/^(\d+(?:\.\d+){0,2})/);
+  // Accept doubled dots from OCR-style extraction artifacts ("2..5.1" should
+  // still be a level-3 section under 2.5, not a level-1 stray).
+  const m = title.match(/^(\d+)((?:\.+\d+){0,2})/);
   if (m) {
-    const dots = (m[1].match(/\./g) || []).length;
-    return Math.min(3, dots + 1);
+    const groups = (m[2].match(/\.+\d+/g) || []).length;
+    return Math.min(3, groups + 1);
   }
   return 1;
 }
 
 function cleanTitle(title) {
-  return title.replace(/[\s.…]{3,}.*$/, "").trim();
+  // The regex that captured this title already stripped the trailing leader
+  // and page number, so we only need to normalize spacing. We also strip a
+  // dangling dot leader if one slipped through (e.g. "Foo .... ").
+  return title
+    .replace(/[\s.…]{3,}\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function dedupeChapters(items) {
@@ -227,12 +269,125 @@ function dedupeChapters(items) {
   return out;
 }
 
+// WeakMap caches the printed-label -> physical-index map for a `pages` array
+// so that we walk every page only once even when parseTOC calls resolve
+// thousands of times.
+const _inferredLabelCache = new WeakMap();
+const _labelMapCache = new WeakMap();
+
+function _getLabelMap(pages) {
+  let m = _labelMapCache.get(pages);
+  if (m) return m;
+  m = new Map();
+  // Only populate the map when the PDF supplied real /PageLabels. If every
+  // page's label is just String(idx+1), it's the synthesized fallback from
+  // extractPages and matching against it would short-circuit the inferred-
+  // label path and return wrong physical indices for books with front matter.
+  let hasReal = false;
+  for (const p of pages) {
+    if (String(p.page_label) !== String(p.page_idx + 1)) { hasReal = true; break; }
+  }
+  if (hasReal) {
+    for (const p of pages) {
+      const k = String(p.page_label).trim().toLowerCase();
+      if (!m.has(k)) m.set(k, p.page_idx);
+    }
+  }
+  _labelMapCache.set(pages, m);
+  return m;
+}
+
+function _inferPrintedLabels(pages) {
+  let cached = _inferredLabelCache.get(pages);
+  if (cached) return cached;
+  const map = new Map();
+  for (const p of pages) {
+    if (p.lines.length === 0) continue;
+    // Pick the top-most line that's not a heading-sized chapter number.
+    let line = p.lines[0];
+    if (line.font_size > 14 && p.lines.length > 1) line = p.lines[1];
+    if (line.font_size > 14) continue;
+    const label = _pluckLabelFromLine(line.text);
+    if (label && !map.has(label)) map.set(label, p.page_idx);
+  }
+  _inferredLabelCache.set(pages, map);
+  return map;
+}
+
+function _pluckLabelFromLine(text) {
+  text = String(text || "").trim();
+  if (!text) return null;
+  // Only consider the first token of a header line. The last-token branch
+  // looks tempting, but TOC entries like "1.5.3 Data Independence 15" would
+  // claim "15" -> tocPageIdx and pollute the map for downstream lookups.
+  const first = text.split(/\s+/)[0] || "";
+  if (/^\d{1,4}$/.test(first)) return first;
+  if (/^[ivxlcdm]{1,8}$/i.test(first)) return first.toLowerCase();
+  return null;
+}
+
+const _bodyOffsetCache = new WeakMap();
+
+function _bodyOffset(pages) {
+  if (_bodyOffsetCache.has(pages)) return _bodyOffsetCache.get(pages);
+  const inferred = _inferPrintedLabels(pages);
+  // Compute offset = physical_idx - (printed - 1) for each plausible
+  // arabic anchor, then take the mode. Real folios across the body all
+  // agree on the same offset; spurious matches scatter and lose to it.
+  const counts = new Map();
+  for (const [lbl, idx] of inferred) {
+    const n = parseInt(lbl, 10);
+    if (!Number.isFinite(n) || n < 1 || n > pages.length) continue;
+    const off = idx - (n - 1);
+    if (off < 0 || off > pages.length) continue;
+    counts.set(off, (counts.get(off) || 0) + 1);
+  }
+  let bestOff = null;
+  let bestCount = 0;
+  for (const [off, c] of counts) {
+    if (c > bestCount || (c === bestCount && bestOff !== null && off < bestOff)) {
+      bestCount = c;
+      bestOff = off;
+    }
+  }
+  // Require at least 3 agreeing anchors before trusting an offset; fewer
+  // suggests we're guessing on a tiny PDF or one with no header folios.
+  if (bestCount < 3) bestOff = null;
+  _bodyOffsetCache.set(pages, bestOff);
+  return bestOff;
+}
+
 function resolvePageLabel(label, pages) {
+  const norm = String(label).trim().toLowerCase();
+
+  // 1) Exact match against the PDF's own /PageLabels (when present).
+  const lblMap = _getLabelMap(pages);
+  if (lblMap.has(norm)) return lblMap.get(norm);
+
   const arabic = parseInt(label, 10);
   if (Number.isFinite(arabic)) {
+    // 2a) For arabic labels, project from the consensus front-matter offset.
+    //     This is more robust than per-label inferred-map lookup, which can
+    //     pick up false positives ("1" appears as the first token of many
+    //     pages besides printed-page-1).
+    const offset = _bodyOffset(pages);
+    if (offset !== null) {
+      const cand = offset + (arabic - 1);
+      if (cand >= 0 && cand < pages.length) return cand;
+    }
+    // 2b) Fall back to the inferred map's individual entry if the consensus
+    //     offset is unknown (small PDFs without enough body folios).
+    const inferred = _inferPrintedLabels(pages);
+    if (inferred.has(norm)) return inferred.get(norm);
+    // 3) Last resort: naive 1:1 (works for PDFs with no front matter).
     if (arabic >= 1 && arabic <= pages.length) return arabic - 1;
     return Math.min(Math.max(0, arabic - 1), pages.length - 1);
   }
+
+  // Roman labels (front-matter): the inferred map is reliable here because
+  // few pages legitimately start with a roman-only first token.
+  const inferred = _inferPrintedLabels(pages);
+  if (inferred.has(norm)) return inferred.get(norm);
   const roman = romanToInt(label);
   if (roman > 0) return Math.min(roman - 1, pages.length - 1);
   return -1;
@@ -850,6 +1005,18 @@ function _countDescendants(node) {
   return n;
 }
 
+function _annotateTree(roots, parentNode) {
+  // Set parent / prev / next pointers on every node in the tree so the
+  // writer can emit /Parent, /Prev, /Next links without re-walking.
+  for (let i = 0; i < roots.length; i++) {
+    const node = roots[i];
+    node.parent = parentNode || null;
+    node.prev = i > 0 ? roots[i - 1] : null;
+    node.next = i < roots.length - 1 ? roots[i + 1] : null;
+    _annotateTree(node.children, node);
+  }
+}
+
 // ---- incremental writer ----------------------------------------------
 
 async function writeOutlineIncremental(originalBytes, chapters) {
@@ -1096,11 +1263,20 @@ async function writeOutlinePdfLib(pdfBytes, chapters) {
   const pages = pdfDoc.getPages();
   if (pages.length === 0) throw new Error("PDF has zero pages");
 
-  const itemRefs = chapters.map(() => ctx.nextRef());
+  // Build the nested tree from the flat chapter list using the chapter
+  // levels (1 = part/chapter, 2 = section, 3 = sub-section). Annotate it
+  // with parent / prev / next pointers so we can emit links in one pass.
+  const tree = _buildOutlineTree(chapters);
+  if (tree.length === 0) throw new Error("no chapters to write");
+  _annotateTree(tree, null);
+  const flat = _flattenTreeBFS(tree);
+
+  // Allocate refs.
+  for (const node of flat) node.ref = ctx.nextRef();
   const outlinesRef = ctx.nextRef();
 
-  for (let i = 0; i < chapters.length; i++) {
-    const ch = chapters[i];
+  for (const node of flat) {
+    const ch = node.chapter;
     const idx = Math.min(Math.max(0, ch.physical_page_idx | 0), pages.length - 1);
     const page = pages[idx];
     const dest = PDFArray.withContext(ctx);
@@ -1109,19 +1285,29 @@ async function writeOutlinePdfLib(pdfBytes, chapters) {
     dest.push(PDFName.of("Fit"));
     const fields = new Map();
     fields.set(PDFName.of("Title"), PDFHexString.fromText(String(ch.title || "")));
-    fields.set(PDFName.of("Parent"), outlinesRef);
+    fields.set(PDFName.of("Parent"), node.parent ? node.parent.ref : outlinesRef);
     fields.set(PDFName.of("Dest"), dest);
-    if (i > 0) fields.set(PDFName.of("Prev"), itemRefs[i - 1]);
-    if (i < chapters.length - 1) fields.set(PDFName.of("Next"), itemRefs[i + 1]);
+    if (node.prev) fields.set(PDFName.of("Prev"), node.prev.ref);
+    if (node.next) fields.set(PDFName.of("Next"), node.next.ref);
+    if (node.children.length > 0) {
+      fields.set(PDFName.of("First"), node.children[0].ref);
+      fields.set(PDFName.of("Last"), node.children[node.children.length - 1].ref);
+      // Positive Count = expanded by default (panel opens with sections visible).
+      fields.set(PDFName.of("Count"), PDFNumber.of(_countDescendants(node)));
+    }
     const itemDict = PDFDict.fromMapWithContext(fields, ctx);
-    ctx.assign(itemRefs[i], itemDict);
+    ctx.assign(node.ref, itemDict);
   }
 
   const outlinesFields = new Map();
   outlinesFields.set(PDFName.of("Type"), PDFName.of("Outlines"));
-  outlinesFields.set(PDFName.of("First"), itemRefs[0]);
-  outlinesFields.set(PDFName.of("Last"),  itemRefs[itemRefs.length - 1]);
-  outlinesFields.set(PDFName.of("Count"), PDFNumber.of(chapters.length));
+  outlinesFields.set(PDFName.of("First"), tree[0].ref);
+  outlinesFields.set(PDFName.of("Last"),  tree[tree.length - 1].ref);
+  // Root /Count = total visible descendants (sum of 1 + descendants over
+  // top-level nodes), positive so the panel expands the whole tree.
+  let rootCount = 0;
+  for (const top of tree) rootCount += 1 + _countDescendants(top);
+  outlinesFields.set(PDFName.of("Count"), PDFNumber.of(rootCount));
   ctx.assign(outlinesRef, PDFDict.fromMapWithContext(outlinesFields, ctx));
 
   pdfDoc.catalog.set(PDFName.of("Outlines"), outlinesRef);

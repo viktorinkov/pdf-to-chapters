@@ -41,6 +41,7 @@ dev = [
   "ruff>=0.7",
   "mypy>=1.13",
   "beautifulsoup4>=4.12",
+  "respx>=0.21",
 ]
 ocr = [
   "ocrmypdf>=17.4",

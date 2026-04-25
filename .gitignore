@@ -26,9 +26,10 @@ htmlcov/
 
 # Node
 node_modules/
-package-lock.json
+# package-lock.json is committed so CI's `npm ci` is reproducible.
 
 # Playwright / e2e
 playwright-report/
 test-results/
 playwright/.cache/
+tests/e2e/.cache/

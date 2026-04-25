@@ -51,7 +51,10 @@ h2.section-title { font-size: clamp(1.6rem, 3vw, 2.2rem); margin: 0 0 1.4rem; le
 h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 
 .mono { font-family: var(--mono); font-feature-settings: "calt" 0; }
-.muted { color: color-mix(in oklab, var(--ink) 60%, transparent); }
+/* WCAG AA requires 4.5:1 for normal text. The 60%-on-paper mix above only
+   reached ~4.15:1 (#7c746c on #f7f3ec). Bump to 75% so muted body copy
+   crosses the threshold. */
+.muted { color: color-mix(in oklab, var(--ink) 75%, transparent); }
 .small { font-size: 0.875rem; }
 
 /* ---------- topbar ---------- */
@@ -246,7 +249,8 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   flex-wrap: wrap;
   border-top: 1px solid var(--hairline);
   font-size: 0.92rem;
-  color: color-mix(in oklab, var(--ink) 65%, transparent);
+  /* 75% mix to clear WCAG AA contrast over --paper. */
+  color: color-mix(in oklab, var(--ink) 75%, transparent);
 }
 .foot .sep { opacity: 0.5; }
 
@@ -297,12 +301,15 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   border-radius: 999px;
   border: 1px solid var(--hairline);
   background: color-mix(in oklab, var(--shell) 60%, transparent);
-  color: color-mix(in oklab, var(--ink) 70%, transparent);
+  /* 78% mix on a tinted shell background to clear WCAG AA. */
+  color: color-mix(in oklab, var(--ink) 78%, transparent);
   white-space: nowrap;
 }
 .pill.ok {
   border-color: color-mix(in oklab, var(--moss) 40%, var(--hairline));
-  color: var(--moss);
+  /* var(--moss) (#5a7a3a) at 8%-tinted bg only reached ~4.0:1 contrast.
+     Mix in 25% --ink to drop the green ~one stop and clear WCAG AA. */
+  color: color-mix(in oklab, var(--moss) 75%, var(--ink));
   background: color-mix(in oklab, var(--moss) 8%, var(--paper));
 }
 .pill.bad {
@@ -388,13 +395,15 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 .dropzone-sub {
   margin: 0;
   font-size: 0.82rem;
-  color: color-mix(in oklab, var(--ink) 65%, transparent);
+  /* 75% mix clears WCAG AA over the dropzone's shell-tinted background. */
+  color: color-mix(in oklab, var(--ink) 75%, transparent);
 }
 .walnut-hint {
   margin: 14px 0 0;
   text-align: center;
   font-size: 0.78rem;
-  color: color-mix(in oklab, var(--ink) 60%, transparent);
+  /* 75% mix clears WCAG AA over --paper. */
+  color: color-mix(in oklab, var(--ink) 75%, transparent);
 }
 
 @keyframes dz-pulse {
