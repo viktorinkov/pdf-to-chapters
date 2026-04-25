@@ -20,6 +20,10 @@ import {
   parseTOC,
   findHeadings,
   writeOutline,
+  writeOutlineIncremental,
+  writeOutlinePdfLib,
+  MAX_BROWSER_BYTES_DESKTOP,
+  MAX_BROWSER_BYTES_MOBILE,
 } from "../site/app.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -126,7 +130,11 @@ async function buildFixture() {
     place(p, 100, "Closing pages.", helv, 11);
   }
 
-  return await doc.save();
+  // Use legacy xref-table format so the incremental writer can locate the
+  // catalog as a top-level indirect object. Real-world books frequently
+  // use this format. PDFs with object streams (where the catalog is packed
+  // inside an ObjStm) fall through to writeOutlinePdfLib at runtime.
+  return await doc.save({ useObjectStreams: false });
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -247,8 +255,158 @@ async function main() {
     `First=${first ? first.toString() : "null"} Last=${last ? last.toString() : "null"}`,
   );
 
+  // ---- new tests for the incremental writer -------------------------------
+
+  // 7. Byte-equivalent prefix: incremental update is append-only. The first
+  //    `original.length` bytes of the output must equal the input exactly.
+  let incBytes;
+  try {
+    incBytes = await writeOutlineIncremental(u8, chapters);
+    let prefixOk = incBytes.length >= u8.length;
+    if (prefixOk) {
+      for (let i = 0; i < u8.length; i++) {
+        if (incBytes[i] !== u8[i]) { prefixOk = false; break; }
+      }
+    }
+    record(
+      "writeOutlineIncremental produces byte-equivalent prefix",
+      prefixOk,
+      `inLen=${u8.length} outLen=${incBytes.length}`,
+    );
+  } catch (e) {
+    record("writeOutlineIncremental runs on legacy-xref fixture", false, e.message);
+  }
+
+  // 8. Large-file synthesis: a 200-page legacy-format PDF. We're not testing
+  //    raw bandwidth (CI memory budgets are tight), just that the code path
+  //    handles a much bigger input than the original 12-page fixture and
+  //    that the output is still a valid PDF with the right outline.
+  let bigBytes, bigOut;
+  try {
+    bigBytes = await buildBigFixture(200);
+    const bigChapters = [];
+    for (let i = 0; i < 5; i++) {
+      bigChapters.push({
+        title: `Chapter ${i + 1}`,
+        physical_page_idx: i * 40,
+        level: 1,
+        printed_label: String(i * 40 + 1),
+        confidence: 0.9,
+        id: `b${i}`,
+      });
+    }
+    bigOut = await writeOutlineIncremental(bigBytes, bigChapters);
+    let prefixOk = bigOut.length >= bigBytes.length;
+    if (prefixOk) {
+      for (let i = 0; i < bigBytes.length; i++) {
+        if (bigOut[i] !== bigBytes[i]) { prefixOk = false; break; }
+      }
+    }
+    record(
+      "writeOutlineIncremental handles 200-page fixture (prefix preserved)",
+      prefixOk,
+      `pages=200 inLen=${bigBytes.length} outLen=${bigOut.length}`,
+    );
+
+    const bigReread = await PDFDocument.load(bigOut);
+    const bigOutlinesRef = bigReread.catalog.get(PDFName.of("Outlines"));
+    const bigOutlines = bigOutlinesRef ? bigReread.context.lookup(bigOutlinesRef) : null;
+    const bigCount = bigOutlines ? bigOutlines.get(PDFName.of("Count")) : null;
+    const bigCountNum = bigCount && typeof bigCount.asNumber === "function" ? bigCount.asNumber() : null;
+    record(
+      "200-page fixture: /Outlines /Count equals chapter count",
+      bigCountNum === 5,
+      `Count=${bigCountNum} expected=5`,
+    );
+  } catch (e) {
+    record("writeOutlineIncremental on 200-page fixture", false, e.message);
+  }
+
+  // 9. Nested outlines: a [level 1, level 2, level 1] sequence should produce
+  //    a tree with the second item nested under the first, and the third item
+  //    a top-level sibling. We assert /First/Last refs and the parent links.
+  try {
+    const nestedChapters = [
+      { id: "n1", title: "Part One",   physical_page_idx: 0, level: 1, printed_label: "1", confidence: 0.9 },
+      { id: "n2", title: "Section A", physical_page_idx: 1, level: 2, printed_label: "2", confidence: 0.9 },
+      { id: "n3", title: "Part Two",   physical_page_idx: 2, level: 1, printed_label: "3", confidence: 0.9 },
+    ];
+    const nestedOut = await writeOutlineIncremental(u8, nestedChapters);
+    const nestedReread = await PDFDocument.load(nestedOut);
+    const outlinesRefN = nestedReread.catalog.get(PDFName.of("Outlines"));
+    const outlinesDictN = outlinesRefN ? nestedReread.context.lookup(outlinesRefN) : null;
+    const firstN = outlinesDictN.get(PDFName.of("First"));
+    const lastN  = outlinesDictN.get(PDFName.of("Last"));
+    // Top-level count visible: 1 root + 1 child (visible because expanded)
+    // + 1 root = 3 total visible items.
+    const countN = outlinesDictN.get(PDFName.of("Count"));
+    const countNNum = countN && typeof countN.asNumber === "function" ? countN.asNumber() : null;
+
+    // First item should have /First pointing at "Section A" (its child).
+    const firstItem = nestedReread.context.lookup(firstN);
+    const firstChildRef = firstItem.get(PDFName.of("First"));
+    const firstChild = firstChildRef ? nestedReread.context.lookup(firstChildRef) : null;
+    const firstChildTitle = firstChild ? firstChild.get(PDFName.of("Title")) : null;
+
+    // Section A should have /Parent pointing back at Part One.
+    const parentRef = firstChild ? firstChild.get(PDFName.of("Parent")) : null;
+    const parentMatchesFirst = parentRef && firstN && parentRef.toString() === firstN.toString();
+
+    // Last item should be Part Two and have /Prev pointing at Part One.
+    const lastItem = nestedReread.context.lookup(lastN);
+    const lastPrev = lastItem.get(PDFName.of("Prev"));
+    const lastPrevMatchesFirst = lastPrev && firstN && lastPrev.toString() === firstN.toString();
+
+    record(
+      "nested outline: total visible /Count is 3 (2 roots + 1 nested child)",
+      countNNum === 3,
+      `Count=${countNNum}`,
+    );
+    record(
+      "nested outline: top item has /First child + child links back via /Parent",
+      firstChildTitle != null && parentMatchesFirst,
+      `firstChildTitle=${firstChildTitle ? "present" : "missing"} parentMatch=${parentMatchesFirst}`,
+    );
+    record(
+      "nested outline: top-level /Prev/Next traversal is correct",
+      lastPrevMatchesFirst,
+      `lastPrev=${lastPrev ? lastPrev.toString() : "null"} firstN=${firstN ? firstN.toString() : "null"}`,
+    );
+  } catch (e) {
+    record("nested outline writes correctly", false, e.message);
+  }
+
+  // 10. File caps reflect the new larger limits.
+  record(
+    "MAX_BROWSER_BYTES_DESKTOP is 500 MB",
+    MAX_BROWSER_BYTES_DESKTOP === 500 * 1024 * 1024,
+    `got ${MAX_BROWSER_BYTES_DESKTOP}`,
+  );
+  record(
+    "MAX_BROWSER_BYTES_MOBILE is 150 MB",
+    MAX_BROWSER_BYTES_MOBILE === 150 * 1024 * 1024,
+    `got ${MAX_BROWSER_BYTES_MOBILE}`,
+  );
+
   summarize();
   process.exit(failures === 0 ? 0 : 1);
+}
+
+// ---- big-fixture builder for the incremental writer ----------------------
+
+async function buildBigFixture(pageCount) {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const W = 612;
+  const H = 792;
+  for (let i = 0; i < pageCount; i++) {
+    const p = doc.addPage([W, H]);
+    p.drawText(`Page ${i + 1} of ${pageCount}`, {
+      x: 72, y: H - 100, size: 14, font: helv,
+    });
+  }
+  // Legacy xref so the incremental writer can find the catalog object.
+  return await doc.save({ useObjectStreams: false });
 }
 
 function summarize() {

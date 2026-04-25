@@ -65,7 +65,7 @@
                 </svg>
               </div>
               <p class="dropzone-title">drop a PDF here</p>
-              <p class="dropzone-sub mono">or click to browse &middot; up to 50 MB</p>
+              <p class="dropzone-sub mono">or click to browse &middot; up to 500 MB</p>
               <input type="file" accept="application/pdf,.pdf" hidden data-walnut="filepicker">
               <noscript>
                 <p class="muted small" style="margin-top:18px">JavaScript is required to use the in-browser tool. you can also run the <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">desktop version</a> locally.</p>
@@ -183,11 +183,11 @@
         </article>
         <article class="card reveal">
           <h3>two model options.</h3>
-          <p>the browser version uses Gemma 2 (~1.5&nbsp;GB) loaded into your tab via WebGPU when you ask for it. the <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">desktop version</a> uses Gemma 4 via Ollama for harder books and longer documents.</p>
+          <p>the browser version uses Gemma 2 (~1.5&nbsp;GB) loaded into your tab via WebGPU when you ask for it. the <a href="https://github.com/viktorinkov/pdf-to-chapters" target="_blank" rel="noopener noreferrer">desktop version</a> uses Gemma 4 via Ollama for harder books.</p>
         </article>
         <article class="card reveal">
           <h3>byte-stable output.</h3>
-          <p>the saved file is your original PDF with an outline dictionary appended. the page contents, fonts, and page tree are untouched.</p>
+          <p>the saved file is your original PDF with an outline section appended &mdash; the bytes you started with are preserved exactly, with new objects, an xref, and a trailer added on the end. page contents, fonts, and page tree are untouched. big books work the same as small ones.</p>
         </article>
         <article class="card reveal">
           <h3>open source.</h3>
@@ -198,7 +198,7 @@
 
     <section id="install" class="install-block">
       <h2 class="section-title">prefer the command line?</h2>
-      <p class="install-lede">there&rsquo;s a desktop version that runs Gemma 4 locally via Ollama and handles bigger PDFs. on macOS:</p>
+      <p class="install-lede">there&rsquo;s a desktop version that runs Gemma 4 locally via Ollama, with the same byte-stable incremental writer used here. on macOS:</p>
       <pre class="codeblock reveal" tabindex="0"><code class="mono">brew install ollama
 brew services start ollama
 ollama pull gemma4:e4b

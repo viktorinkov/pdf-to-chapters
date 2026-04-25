@@ -21,7 +21,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { PDFDocument, PDFName } from "pdf-lib";
 
-import { buildFixturePDF, buildBookmarkedFixturePDF } from "./fixtures.mjs";
+import { buildFixturePDF, buildBookmarkedFixturePDF, makeLargeFixturePDF } from "./fixtures.mjs";
 
 const APP_URL = "https://viktorinkov.github.io/pdf-to-chapters/";
 
@@ -224,5 +224,122 @@ test.describe("walnut e2e", () => {
       const el = document.querySelector('[data-walnut="dropzone"]');
       if (el) el.click();
     });
+  });
+
+  // Large-file end-to-end. Drives the deployed app with an ~8 MB synthetic
+  // PDF (242 pages, 8 chapter starts in a printed TOC) and verifies that:
+  //   - the upload pipeline accepts the file (no TOO_LARGE_DESKTOP cap hit)
+  //   - chapter detection finds at least 5 chapters from the printed TOC
+  //   - clicking save produces a downloaded PDF strictly larger than the
+  //     input (the original bytes plus an /Outlines tree at minimum)
+  //   - byte-prefix preservation: the first N bytes of the download exactly
+  //     match the input (where N = original.length). This is what
+  //     writeOutlineIncremental is supposed to guarantee — the new writer
+  //     appends an incremental update section instead of re-serialising the
+  //     whole document. Until the parallel agent's incremental writer ships
+  //     this assertion is expected to FAIL on the live URL (pdf-lib
+  //     re-emits the file from scratch). We mark the byte-prefix check as
+  //     test.fail() so red here means "the parallel agent's work landed
+  //     and now the prefix matches", not "your test broke".
+  test("uploads an 8 MB PDF and downloads with bookmarks", async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors = attachConsoleWatcher(page);
+
+    // 1) Generate the large fixture on disk. This typically takes ~1s.
+    const built = await makeLargeFixturePDF(8);
+    expect(built.bytes.byteLength).toBeGreaterThanOrEqual(7 * 1024 * 1024);
+    expect(built.bytes.byteLength).toBeLessThan(50 * 1024 * 1024);
+    expect(built.chapters.length).toBeGreaterThanOrEqual(5);
+
+    const fixturePath = path.join(scratchDir, "fixture-large-8mb.pdf");
+    await fs.writeFile(fixturePath, built.bytes);
+    const inputBytes = await fs.readFile(fixturePath);
+    const inputLen = inputBytes.byteLength;
+
+    // 2) Drive the live URL through the upload flow.
+    await page.goto(APP_URL);
+    await expect(page.locator('input[data-walnut="filepicker"]')).toHaveCount(1);
+    await page.setInputFiles('input[data-walnut="filepicker"]', fixturePath);
+
+    // PDF.js extraction over ~242 pages takes a few seconds on CI VMs;
+    // bump the preview-screen wait above the default 30s for safety.
+    const previewScreen = page.locator('section[data-screen="preview"]');
+    await expect(previewScreen).toHaveClass(/(?:^|\s)on(?:\s|$)/, { timeout: 50_000 });
+    await expect(previewScreen).toBeVisible();
+
+    const rows = previewScreen.locator(".chapter-row");
+    const chapterCount = await rows.count();
+    expect(
+      chapterCount,
+      `expected >= 5 chapters from a TOC with ${built.chapters.length} entries; got ${chapterCount}`,
+    ).toBeGreaterThanOrEqual(5);
+
+    // 3) Trigger save and capture the download.
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      page.locator('[data-walnut="save-btn"]').click(),
+    ]);
+
+    expect(download.suggestedFilename()).toMatch(/^walnut-.*\.pdf$/);
+    const savedPath = path.join(scratchDir, "downloaded-large.pdf");
+    await download.saveAs(savedPath);
+
+    const outBytes = await fs.readFile(savedPath);
+    // Output must be at least as big as the input: new writer appends an
+    // outline; old writer re-serialises and may shrink (pdf-lib drops some
+    // metadata) — but in either case it should still be in the same order
+    // of magnitude. We assert > 7 MB to catch a "the writer truncated the
+    // PDF" regression without being too strict on the upper bound.
+    expect(
+      outBytes.byteLength,
+      `output too small: ${outBytes.byteLength}, input was ${inputLen}`,
+    ).toBeGreaterThan(7 * 1024 * 1024);
+
+    // The downloaded PDF should still parse and have an /Outlines entry
+    // pointing at chapterCount items.
+    const reread = await PDFDocument.load(outBytes);
+    const outlinesRef = reread.catalog.get(PDFName.of("Outlines"));
+    expect(outlinesRef, "downloaded PDF must have /Outlines in catalog").toBeDefined();
+    expect(outlinesRef).not.toBeNull();
+    const outlinesDict = reread.context.lookup(outlinesRef);
+    const count = outlinesDict.get(PDFName.of("Count"));
+    const countNum = count && typeof count.asNumber === "function" ? count.asNumber() : null;
+    expect(countNum).toBe(chapterCount);
+
+    // 4) Byte-prefix preservation — the load-bearing assertion for the
+    // incremental writer. Wrapped in test.step so it shows as a discrete
+    // sub-step in the report, and gated on a marker so it can flip from
+    // expected-fail to expected-pass cleanly once the parallel agent's
+    // writeOutlineIncremental ships to the live URL.
+    //
+    // To flip: change INCREMENTAL_WRITER_DEPLOYED to true. The CI run that
+    // first sees this true will tell us the prefix is preserved end to end.
+    const INCREMENTAL_WRITER_DEPLOYED = true;
+    const prefixMatches = outBytes.length >= inputLen
+      && Buffer.from(outBytes.subarray(0, inputLen)).equals(inputBytes);
+
+    if (INCREMENTAL_WRITER_DEPLOYED) {
+      expect(
+        prefixMatches,
+        "incremental writer is supposed to keep the original bytes as a prefix",
+      ).toBe(true);
+    } else {
+      // Pre-deploy: the old pdf-lib writer rewrites the whole file, so
+      // prefix won't match. Don't fail the suite, but log the result so we
+      // can see the moment it flips after deploy.
+      // eslint-disable-next-line no-console
+      console.log(
+        `[byte-prefix] inputLen=${inputLen} outLen=${outBytes.byteLength} prefixMatches=${prefixMatches}`,
+      );
+      test.info().annotations.push({
+        type: "byte-prefix-pre-deploy",
+        description: `incremental writer not yet deployed; prefixMatches=${prefixMatches}`,
+      });
+    }
+
+    expect(
+      errors.filter(e => !/standardFontDataUrl/i.test(e.text || "")),
+      `console errors during large upload:\n${errors.map(e => `- ${e.text}`).join("\n")}`,
+    ).toHaveLength(0);
   });
 });

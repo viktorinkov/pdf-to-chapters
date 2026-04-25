@@ -6,7 +6,8 @@
   "description": "Node-side smoke test for walnut's browser pipeline.",
   "scripts": {
     "test:browser": "node scripts/test_browser.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "bench:large": "node scripts/bench_large.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

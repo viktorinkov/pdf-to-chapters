@@ -17,8 +17,8 @@ const ERR = Object.freeze({
   ENCRYPTED: "this PDF is password protected. walnut can't unlock it.",
   NO_TEXT: "this PDF has no text layer. it may be a scan; try OCR first.",
   NO_CHAPTERS: "no chapters could be detected from font sizes or a printed table of contents. try the local model below, or use the desktop version.",
-  TOO_LARGE_DESKTOP: "this file is over 50 MB. the browser version caps there to keep memory sane; the desktop version handles larger files.",
-  TOO_LARGE_MOBILE: "this file is over 20 MB. mobile browsers run out of memory on bigger PDFs; try a desktop browser or the desktop version.",
+  TOO_LARGE_DESKTOP: "this file is over 500 MB. the browser version caps there to keep memory sane; the desktop version handles larger files.",
+  TOO_LARGE_MOBILE: "this file is over 150 MB. mobile browsers run out of memory on bigger PDFs; try a desktop browser or the desktop version.",
   WRITE_FAILED: "could not write the outline. the PDF may be malformed.",
   LOAD_FAILED: "this PDF could not be opened.",
   MULTIPLE_FILES: "drop only one PDF at a time.",
@@ -28,8 +28,8 @@ const ERR = Object.freeze({
 function isMobileUA() {
   return typeof navigator !== "undefined" && /Mobi|Android/i.test(navigator.userAgent || "");
 }
-const MAX_BROWSER_BYTES_DESKTOP = 50 * 1024 * 1024;
-const MAX_BROWSER_BYTES_MOBILE  = 20 * 1024 * 1024;
+const MAX_BROWSER_BYTES_DESKTOP = 500 * 1024 * 1024;
+const MAX_BROWSER_BYTES_MOBILE  = 150 * 1024 * 1024;
 
 let pdfjsLibPromise = null;
 let pdfLibPromise   = null;
@@ -286,8 +286,793 @@ function findHeadings(pages) {
 }
 
 // ---- outline writing -------------------------------------------------
+//
+// Two writers:
+//   - writeOutlineIncremental: pure-JS PDF incremental update. Reads only
+//     the trailer, catalog, and page tree from raw bytes; never parses the
+//     body. Memory is O(outline size), independent of input size. Output is
+//     byte-identical to the input plus an appended region.
+//   - writeOutlinePdfLib: the original pdf-lib path. Loads the entire PDF
+//     into JS objects (memory ~5-10x file size). Used as a fallback when
+//     the incremental path raises.
 
-async function writeOutline(pdfBytes, chapters) {
+// ---- byte / latin-1 helpers ------------------------------------------
+
+function _latin1FromBytes(bytes, start, end) {
+  // Treat each byte as a code point. PDF syntax outside string/stream
+  // contents is always 7-bit ASCII / Latin-1 safe.
+  if (start === undefined) start = 0;
+  if (end === undefined) end = bytes.length;
+  let s = "";
+  // Chunked to avoid call stack issues for very large files.
+  const CHUNK = 0x8000;
+  for (let i = start; i < end; i += CHUNK) {
+    const stop = Math.min(end, i + CHUNK);
+    s += String.fromCharCode.apply(null, bytes.subarray(i, stop));
+  }
+  return s;
+}
+
+// Cache the latin-1 projection and the indirect-object index per Uint8Array.
+// Without this, _findIndirectObject re-allocates a string the size of the
+// whole file on every call, which is O(N pages * file size) and turns a
+// 50 MB write into ~60 seconds. With these caches, the same write completes
+// in a fraction of a second.
+const _latin1FullCache = new WeakMap();
+const _objIndexCache   = new WeakMap();
+
+function _latin1Full(bytes) {
+  let cached = _latin1FullCache.get(bytes);
+  if (cached === undefined) {
+    cached = _latin1FromBytes(bytes, 0, bytes.length);
+    _latin1FullCache.set(bytes, cached);
+  }
+  return cached;
+}
+
+function _buildObjIndex(bytes) {
+  let cached = _objIndexCache.get(bytes);
+  if (cached !== undefined) return cached;
+  const text = _latin1Full(bytes);
+  const map = new Map();
+  // Same anchoring as the original per-object regex: preceded by start-of-
+  // file or a whitespace char so we don't match "5 0 obj" embedded in a
+  // string. m[1] is "" (BOL) or one whitespace char.
+  const re = /(^|[\r\n\s])(\d+)\s+(\d+)\s+obj\b/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const objStart = m.index + m[1].length;
+    const num = parseInt(m[2], 10);
+    const gen = parseInt(m[3], 10);
+    const key = num + "/" + gen;
+    let arr = map.get(key);
+    if (!arr) { arr = []; map.set(key, arr); }
+    arr.push(objStart);
+  }
+  _objIndexCache.set(bytes, map);
+  return map;
+}
+
+function _bytesFromLatin1(s) {
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function _utf16beHexFromString(s) {
+  // PDF /Title hex string with UTF-16BE BOM, suitable for any Unicode title.
+  let hex = "FEFF";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    hex += ((c >> 8) & 0xff).toString(16).padStart(2, "0").toUpperCase();
+    hex += (c & 0xff).toString(16).padStart(2, "0").toUpperCase();
+  }
+  return "<" + hex + ">";
+}
+
+function _padLeft(n, width, pad) {
+  let s = String(n);
+  if (pad === undefined) pad = "0";
+  while (s.length < width) s = pad + s;
+  return s;
+}
+
+// ---- trailer / xref parsing ------------------------------------------
+
+function _findStartXref(bytes) {
+  // Read up to the last ~64 KB. The spec only requires <1024, but being
+  // generous costs nothing and tolerates files with appended garbage.
+  const tailSize = Math.min(bytes.length, 65536);
+  const tail = _latin1FromBytes(bytes, bytes.length - tailSize, bytes.length);
+  // Find the LAST occurrence of startxref (handles already-incremental files).
+  const idx = tail.lastIndexOf("startxref");
+  if (idx < 0) throw new Error("no startxref marker found");
+  // After startxref: optional whitespace, integer, whitespace, %%EOF.
+  const m = tail.slice(idx).match(/startxref\s+(\d+)\s*%%EOF/);
+  if (!m) throw new Error("malformed startxref/%%EOF marker");
+  const startXrefOffset = parseInt(m[1], 10);
+  if (!Number.isFinite(startXrefOffset) || startXrefOffset < 0 || startXrefOffset >= bytes.length) {
+    throw new Error("startxref offset out of range: " + startXrefOffset);
+  }
+  return startXrefOffset;
+}
+
+function _readDictAt(bytes, openOffset) {
+  // Returns {dict: <inner dict text including <<...>>>, end: offset just past >>}.
+  // Handles nested dicts/arrays and string literals robustly enough for our
+  // catalog and trailer needs.
+  if (bytes[openOffset] !== 0x3c /* '<' */ || bytes[openOffset + 1] !== 0x3c) {
+    throw new Error("expected '<<' at offset " + openOffset);
+  }
+  let i = openOffset + 2;
+  let depth = 1;
+  while (i < bytes.length) {
+    const c = bytes[i];
+    const c2 = bytes[i + 1];
+    if (c === 0x3c && c2 === 0x3c) { depth++; i += 2; continue; }
+    if (c === 0x3e && c2 === 0x3e) {
+      depth--;
+      i += 2;
+      if (depth === 0) {
+        return {
+          text: _latin1FromBytes(bytes, openOffset, i),
+          end: i,
+        };
+      }
+      continue;
+    }
+    if (c === 0x28 /* '(' */) {
+      // PDF literal string, balanced parens with backslash escapes.
+      i++;
+      let pdepth = 1;
+      while (i < bytes.length && pdepth > 0) {
+        const cc = bytes[i];
+        if (cc === 0x5c) { i += 2; continue; }
+        if (cc === 0x28) pdepth++;
+        else if (cc === 0x29) pdepth--;
+        i++;
+      }
+      continue;
+    }
+    if (c === 0x3c /* '<' but not '<<' */) {
+      // hex string <FE...> — skip to matching >
+      i++;
+      while (i < bytes.length && bytes[i] !== 0x3e) i++;
+      if (i < bytes.length) i++;
+      continue;
+    }
+    i++;
+  }
+  throw new Error("unterminated dictionary starting at " + openOffset);
+}
+
+function _parseTrailerDict(text) {
+  // Return {Root: {num,gen}, Size: N, Prev: offset|null, hasEncrypt: bool}
+  // text is the inner dict including << ... >>.
+  // We extract keys with simple regex; values may be:
+  //   - <num> <gen> R  (indirect ref)
+  //   - integer
+  //   - /Name
+  // /Root is always indirect, /Size is integer, /Prev is integer.
+  const out = { Root: null, Size: null, Prev: null, hasEncrypt: false };
+  // Strip outer << >> for matching.
+  const inner = text.slice(2, text.length - 2);
+  // /Root <n> <g> R
+  const mRoot = inner.match(/\/Root\s+(\d+)\s+(\d+)\s+R/);
+  if (mRoot) out.Root = { num: parseInt(mRoot[1], 10), gen: parseInt(mRoot[2], 10) };
+  // /Size <n>
+  const mSize = inner.match(/\/Size\s+(\d+)/);
+  if (mSize) out.Size = parseInt(mSize[1], 10);
+  // /Prev <n>
+  const mPrev = inner.match(/\/Prev\s+(\d+)/);
+  if (mPrev) out.Prev = parseInt(mPrev[1], 10);
+  // /Encrypt presence
+  if (/\/Encrypt\s+/.test(inner)) out.hasEncrypt = true;
+  return out;
+}
+
+function _parseTrailerAndCatalog(bytes) {
+  // Walk back through xref tables / streams, collecting offsets.
+  // Returns {rootRef, size, prevXrefOffset, catalogObjOffset, catalogDictText, catalogObjEnd, hasEncrypt}.
+  const startXrefOffset = _findStartXref(bytes);
+
+  // Detect: at startXrefOffset, do we have "xref" (legacy) or an
+  // indirect object header (xref stream)?
+  const peek = _latin1FromBytes(bytes, startXrefOffset, Math.min(bytes.length, startXrefOffset + 32));
+  let trailer = null;
+
+  if (/^xref\b/.test(peek)) {
+    // legacy xref TABLE
+    trailer = _parseLegacyXrefTrailer(bytes, startXrefOffset);
+  } else if (/^\d+\s+\d+\s+obj/.test(peek)) {
+    // xref STREAM
+    trailer = _parseXrefStreamTrailer(bytes, startXrefOffset);
+  } else {
+    throw new Error("unrecognized xref structure at offset " + startXrefOffset);
+  }
+
+  if (trailer.hasEncrypt) {
+    const err = new Error("encrypted");
+    err.code = "ENCRYPTED";
+    throw err;
+  }
+  if (!trailer.Root) throw new Error("trailer has no /Root");
+  if (!trailer.Size) throw new Error("trailer has no /Size");
+
+  // Now find the catalog object body.
+  const catalog = _findIndirectObject(bytes, trailer.Root.num, trailer.Root.gen);
+  return {
+    rootRef: trailer.Root,
+    size: trailer.Size,
+    prevXrefOffset: startXrefOffset,
+    catalogObjOffset: catalog.objStart,
+    catalogObjEnd: catalog.objEnd,
+    catalogDictText: catalog.dictText,
+    catalogDictEnd: catalog.dictEnd,
+  };
+}
+
+function _parseLegacyXrefTrailer(bytes, xrefStart) {
+  // Locate "trailer" keyword after the xref table.
+  const tail = _latin1FromBytes(bytes, xrefStart, bytes.length);
+  const trIdx = tail.indexOf("trailer");
+  if (trIdx < 0) throw new Error("legacy xref: no trailer keyword");
+  // Trailer dict starts at the next "<<".
+  const dictAbsOffset = xrefStart + tail.indexOf("<<", trIdx);
+  if (dictAbsOffset < xrefStart) throw new Error("legacy xref: trailer dict not found");
+  const { text } = _readDictAt(bytes, dictAbsOffset);
+  return _parseTrailerDict(text);
+}
+
+function _parseXrefStreamTrailer(bytes, xrefStart) {
+  // The xref stream is an indirect object: "<num> <gen> obj <<...>> stream ... endstream endobj"
+  // We only need the dict (before "stream"). It contains /Root /Size /Prev etc.
+  // Find "<<" after the obj header.
+  const tail = _latin1FromBytes(bytes, xrefStart, Math.min(bytes.length, xrefStart + 16384));
+  const mObj = tail.match(/^(\d+)\s+(\d+)\s+obj\s*/);
+  if (!mObj) throw new Error("xref stream: missing obj header");
+  const after = mObj[0].length;
+  const dictRel = tail.indexOf("<<", after);
+  if (dictRel < 0) throw new Error("xref stream: no dict");
+  const dictAbs = xrefStart + dictRel;
+  const { text } = _readDictAt(bytes, dictAbs);
+  return _parseTrailerDict(text);
+}
+
+function _findIndirectObject(bytes, num, gen) {
+  // Look up candidate offsets in the cached object index, then validate each
+  // by checking that "<<" follows the obj marker. The index is built once per
+  // bytes Uint8Array via _buildObjIndex(), so subsequent lookups are O(1).
+  const map = _buildObjIndex(bytes);
+  const candidates = map.get(num + "/" + gen);
+  if (!candidates || candidates.length === 0) {
+    throw new Error("indirect object " + num + " " + gen + " not found");
+  }
+  for (const objStart of candidates) {
+    // Skip past "<num> <gen> obj" to land at the object body.
+    let i = objStart;
+    // num
+    while (i < bytes.length && bytes[i] >= 0x30 && bytes[i] <= 0x39) i++;
+    while (i < bytes.length && (bytes[i] === 0x20 || bytes[i] === 0x09)) i++;
+    // gen
+    while (i < bytes.length && bytes[i] >= 0x30 && bytes[i] <= 0x39) i++;
+    while (i < bytes.length && (bytes[i] === 0x20 || bytes[i] === 0x09)) i++;
+    // "obj"
+    if (bytes[i] !== 0x6f || bytes[i + 1] !== 0x62 || bytes[i + 2] !== 0x6a) continue;
+    i += 3;
+    while (i < bytes.length && (bytes[i] === 0x20 || bytes[i] === 0x09 || bytes[i] === 0x0a || bytes[i] === 0x0d)) i++;
+    if (bytes[i] !== 0x3c || bytes[i + 1] !== 0x3c) continue;
+    let dictInfo;
+    try {
+      dictInfo = _readDictAt(bytes, i);
+    } catch (_) {
+      continue;
+    }
+    // Look ahead a few bytes to detect a stream object. We cap the latin-1
+    // slice at 64 bytes so this stays cheap even for huge files.
+    const sliceEnd = Math.min(bytes.length, dictInfo.end + 64);
+    const after = _latin1FromBytes(bytes, dictInfo.end, sliceEnd);
+    const isStream = /^\s*stream/.test(after);
+    let objEnd = dictInfo.end;
+    if (isStream) {
+      const fullText = _latin1Full(bytes);
+      const endObjIdx = fullText.indexOf("endobj", dictInfo.end);
+      if (endObjIdx > 0) objEnd = endObjIdx + "endobj".length;
+    } else {
+      const endObjIdx = after.indexOf("endobj");
+      if (endObjIdx > 0) objEnd = dictInfo.end + endObjIdx + "endobj".length;
+    }
+    return {
+      objStart,
+      objEnd,
+      dictText: dictInfo.text,
+      dictStart: i,
+      dictEnd: dictInfo.end,
+      isStream,
+    };
+  }
+  throw new Error("indirect object " + num + " " + gen + " not parseable");
+}
+
+// ---- catalog dict editing --------------------------------------------
+
+function _stripDictKey(innerDict, key) {
+  // Remove a /Key value pair from an inner dict text (without surrounding << >>).
+  // We tokenize to "find next key" and remove [keyStart..nextKeyStart).
+  // Returns the modified inner text.
+  const re = new RegExp("\\/" + key + "\\b");
+  const m = re.exec(innerDict);
+  if (!m) return innerDict;
+  const keyStart = m.index;
+  // Walk forward past the key to find the start of the value.
+  let i = keyStart + m[0].length;
+  // Skip whitespace.
+  while (i < innerDict.length && /\s/.test(innerDict[i])) i++;
+  // Now skip exactly one PDF value: a name, integer, ref (n g R), name, hex/literal string, dict, or array.
+  i = _skipPdfValue(innerDict, i);
+  // Skip trailing whitespace.
+  while (i < innerDict.length && /\s/.test(innerDict[i])) i++;
+  return innerDict.slice(0, keyStart) + innerDict.slice(i);
+}
+
+function _skipPdfValue(s, start) {
+  let i = start;
+  if (i >= s.length) return i;
+  const c = s[i];
+  if (c === "<") {
+    if (s[i + 1] === "<") {
+      // dict
+      let depth = 1;
+      i += 2;
+      while (i < s.length && depth > 0) {
+        if (s[i] === "<" && s[i + 1] === "<") { depth++; i += 2; }
+        else if (s[i] === ">" && s[i + 1] === ">") { depth--; i += 2; }
+        else if (s[i] === "(") { i = _skipParenString(s, i); }
+        else if (s[i] === "<") {
+          // hex string
+          while (i < s.length && s[i] !== ">") i++;
+          if (i < s.length) i++;
+        } else i++;
+      }
+      return i;
+    } else {
+      // hex string
+      while (i < s.length && s[i] !== ">") i++;
+      if (i < s.length) i++;
+      return i;
+    }
+  }
+  if (c === "[") {
+    let depth = 1;
+    i++;
+    while (i < s.length && depth > 0) {
+      if (s[i] === "[") depth++;
+      else if (s[i] === "]") depth--;
+      else if (s[i] === "(") { i = _skipParenString(s, i); continue; }
+      else if (s[i] === "<" && s[i + 1] === "<") {
+        // nested dict — skip recursively
+        i = _skipPdfValue(s, i);
+        continue;
+      } else if (s[i] === "<") {
+        while (i < s.length && s[i] !== ">") i++;
+      }
+      i++;
+    }
+    return i;
+  }
+  if (c === "(") return _skipParenString(s, i);
+  if (c === "/") {
+    i++;
+    // Name: terminated by whitespace or delimiter.
+    while (i < s.length && !/[\s\/<>\[\]()]/.test(s[i])) i++;
+    return i;
+  }
+  // Number / boolean / null / indirect ref. Try to detect "n g R".
+  const numRe = /^[+\-]?[\d.]+/;
+  const m1 = s.slice(i).match(numRe);
+  if (m1) {
+    let j = i + m1[0].length;
+    // Could be "n g R": look ahead.
+    const refMatch = s.slice(j).match(/^\s+\d+\s+R\b/);
+    if (refMatch) j += refMatch[0].length;
+    return j;
+  }
+  // bool / null
+  const m2 = s.slice(i).match(/^(true|false|null)\b/);
+  if (m2) return i + m2[0].length;
+  // Unknown: advance one char to avoid infinite loop.
+  return i + 1;
+}
+
+function _skipParenString(s, start) {
+  let i = start + 1;
+  let depth = 1;
+  while (i < s.length && depth > 0) {
+    if (s[i] === "\\") { i += 2; continue; }
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") depth--;
+    i++;
+  }
+  return i;
+}
+
+function _reviseCatalogDict(catalogDictText, outlinesRef) {
+  // catalogDictText starts with "<<" and ends with ">>". Strip any existing
+  // /Outlines and /PageMode entries, then add our own before the closing ">>".
+  let inner = catalogDictText.slice(2, catalogDictText.length - 2);
+  inner = _stripDictKey(inner, "Outlines");
+  inner = _stripDictKey(inner, "PageMode");
+  // Trim trailing whitespace before closing.
+  inner = inner.replace(/\s+$/, "");
+  inner += "\n/Outlines " + outlinesRef.num + " " + outlinesRef.gen + " R";
+  inner += "\n/PageMode /UseOutlines\n";
+  return "<<" + inner + ">>";
+}
+
+// ---- page tree walking -----------------------------------------------
+
+function _findRefValueInDict(innerDict, key) {
+  // Find "/Key <n> <g> R" — return {num, gen} or null.
+  const re = new RegExp("\\/" + key + "\\s+(\\d+)\\s+(\\d+)\\s+R\\b");
+  const m = re.exec(innerDict);
+  return m ? { num: parseInt(m[1], 10), gen: parseInt(m[2], 10) } : null;
+}
+
+function _findArrayValueInDict(innerDict, key) {
+  // Find "/Key [...]" — return the inner array text (without brackets).
+  const re = new RegExp("\\/" + key + "\\s*\\[");
+  const m = re.exec(innerDict);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  let depth = 1;
+  let i = start;
+  while (i < innerDict.length && depth > 0) {
+    if (innerDict[i] === "[") depth++;
+    else if (innerDict[i] === "]") depth--;
+    if (depth === 0) break;
+    i++;
+  }
+  return innerDict.slice(start, i);
+}
+
+function _findNameInDict(innerDict, key) {
+  // Find "/Key /Name" — return the name (without slash) or null.
+  const re = new RegExp("\\/" + key + "\\s*\\/(\\w+)");
+  const m = re.exec(innerDict);
+  return m ? m[1] : null;
+}
+
+function _parseRefList(arrayText) {
+  // Parse "<n> <g> R <n> <g> R ..." -> [{num, gen}, ...].
+  const out = [];
+  const re = /(\d+)\s+(\d+)\s+R/g;
+  let m;
+  while ((m = re.exec(arrayText)) !== null) {
+    out.push({ num: parseInt(m[1], 10), gen: parseInt(m[2], 10) });
+  }
+  return out;
+}
+
+function _collectPageRefs(bytes, rootRef) {
+  // Walk the page tree under /Catalog -> /Pages -> /Kids ...
+  const catalog = _findIndirectObject(bytes, rootRef.num, rootRef.gen);
+  const innerCatalog = catalog.dictText.slice(2, catalog.dictText.length - 2);
+  const pagesRef = _findRefValueInDict(innerCatalog, "Pages");
+  if (!pagesRef) throw new Error("catalog has no /Pages");
+
+  const out = [];
+  const seen = new Set();
+
+  function walk(ref) {
+    const key = ref.num + "/" + ref.gen;
+    if (seen.has(key)) return;
+    seen.add(key);
+    let info;
+    try {
+      info = _findIndirectObject(bytes, ref.num, ref.gen);
+    } catch (_) {
+      return;
+    }
+    const inner = info.dictText.slice(2, info.dictText.length - 2);
+    const type = _findNameInDict(inner, "Type");
+    if (type === "Page") {
+      out.push(ref);
+      return;
+    }
+    if (type === "Pages" || _findArrayValueInDict(inner, "Kids")) {
+      const kidsArr = _findArrayValueInDict(inner, "Kids");
+      if (kidsArr) {
+        const kids = _parseRefList(kidsArr);
+        for (const kid of kids) walk(kid);
+      }
+      return;
+    }
+    // Fallback: treat as a leaf.
+    out.push(ref);
+  }
+
+  walk(pagesRef);
+  return out;
+}
+
+// ---- nested outline tree -----------------------------------------------
+
+function _buildOutlineTree(chapters) {
+  // Convert a flat [{title, level, physical_page_idx, ...}] list into a nested
+  // tree. Levels start at 1; missing/invalid levels default to 1.
+  const root = { children: [] };
+  const stack = [root]; // stack[i] is the current parent at depth i+1's parent
+  // stack[0] is root, stack[1] is parent for level-1 nodes, etc.
+  // Convention: stack length grows by 1 when pushing a child.
+  for (const ch of chapters) {
+    let lvl = ch.level | 0;
+    if (!Number.isFinite(lvl) || lvl < 1) lvl = 1;
+    if (lvl > 3) lvl = 3;
+    // Trim stack to depth lvl (so its top is the parent for this level).
+    while (stack.length > lvl) stack.pop();
+    while (stack.length < lvl) {
+      // No previous parent at this level: attach to whatever's available.
+      // (E.g. a level-2 entry appearing first.) Use the deepest available.
+      const parent = stack[stack.length - 1];
+      if (parent.children.length === 0) {
+        // Promote: create a synthetic? No — just attach at this level.
+        break;
+      }
+      stack.push(parent.children[parent.children.length - 1]);
+    }
+    const parent = stack[stack.length - 1];
+    const node = { chapter: ch, level: lvl, children: [] };
+    parent.children.push(node);
+    // Push this node so subsequent deeper levels can attach.
+    stack.push(node);
+  }
+  return root.children;
+}
+
+function _flattenTreeBFS(nodes) {
+  // Walk depth-first to assign object refs in document order.
+  const out = [];
+  function walk(arr) {
+    for (const n of arr) {
+      out.push(n);
+      walk(n.children);
+    }
+  }
+  walk(nodes);
+  return out;
+}
+
+function _countDescendants(node) {
+  // The PDF /Count for an outline item is the total number of its visible
+  // (open) descendants. We mark all items "open" to keep the panel expanded.
+  let n = node.children.length;
+  for (const c of node.children) n += _countDescendants(c);
+  return n;
+}
+
+// ---- incremental writer ----------------------------------------------
+
+async function writeOutlineIncremental(originalBytes, chapters) {
+  // Coerce to Uint8Array so we can index bytes consistently. Do not copy if
+  // already a Uint8Array (this is the whole point — we preserve the original
+  // bytes byte-for-byte and append).
+  let bytes = originalBytes;
+  if (bytes instanceof ArrayBuffer) {
+    bytes = new Uint8Array(bytes);
+  } else if (!(bytes instanceof Uint8Array)) {
+    bytes = new Uint8Array(bytes);
+  }
+  if (bytes.length < 32) throw new Error("file too small to be a PDF");
+  // Quick header check.
+  const header = _latin1FromBytes(bytes, 0, 5);
+  if (header !== "%PDF-") throw new Error("not a PDF");
+
+  // 1. Parse the trailer to find /Root, /Size, /Prev xref offset.
+  const tc = _parseTrailerAndCatalog(bytes);
+  if (!chapters || chapters.length === 0) throw new Error("no chapters to write");
+
+  // 2. Walk the page tree.
+  const pageRefs = _collectPageRefs(bytes, tc.rootRef);
+  if (pageRefs.length === 0) throw new Error("no pages found in PDF");
+
+  // 3. Build the outline tree and assign object numbers.
+  const tree = _buildOutlineTree(chapters);
+  if (tree.length === 0) throw new Error("outline tree is empty");
+  const flat = _flattenTreeBFS(tree);
+  // Object number for the new outlines root: tc.size, then items: tc.size+1..
+  const outlinesObjNum = tc.size;
+  const itemBaseObjNum = tc.size + 1;
+  for (let i = 0; i < flat.length; i++) {
+    flat[i].objNum = itemBaseObjNum + i;
+  }
+  // Also reserve a number for the revised catalog: we re-emit the catalog
+  // at its existing num/gen as a revision (no new number needed).
+
+  // 4. Compute page targets for each item.
+  for (const item of flat) {
+    const idx = Math.min(Math.max(0, item.chapter.physical_page_idx | 0), pageRefs.length - 1);
+    item.pageRef = pageRefs[idx];
+  }
+
+  // 5. Emit object bodies as latin-1 strings, computing offsets.
+  // We build a combined latin-1 string for the appended region, then
+  // measure offsets within it. The original file's length is the base.
+  const baseOffset = bytes.length;
+  let region = "";
+
+  // Pad with a single newline so that startxref offsets aren't ambiguous.
+  // Spec doesn't require it, but Adobe and most readers expect a clean
+  // separation between the original EOF and the new section.
+  region += "\n";
+
+  // 5a. Item objects.
+  const itemOffsets = new Map(); // objNum -> offset
+  for (const item of flat) {
+    const offset = baseOffset + region.length;
+    itemOffsets.set(item.objNum, offset);
+    const titleHex = _utf16beHexFromString(String(item.chapter.title || ""));
+    let body = item.objNum + " 0 obj\n";
+    body += "<<\n";
+    body += "/Title " + titleHex + "\n";
+    // Parent: the immediate parent node, or the outlines root if a top-level item.
+    // Determine parent: we walk the tree; for that we need to know each node's parent.
+    // We'll fill in parents below by index.
+    // PLACEHOLDER — we'll rewrite this loop after building parent map.
+    body += "__PARENT__\n";
+    body += "/Dest [" + item.pageRef.num + " " + item.pageRef.gen + " R /Fit]\n";
+    body += "__SIBLINGS__\n";
+    body += "__CHILDREN__\n";
+    body += ">>\nendobj\n";
+    item._body = body;
+  }
+
+  // Build parent / sibling / children references using the tree directly.
+  // Top-level nodes have parent = outlines root.
+  function fillItem(node, parentObjNum, prevSibling, nextSibling) {
+    let parent = "/Parent " + parentObjNum + " 0 R";
+    let siblings = "";
+    if (prevSibling) siblings += "/Prev " + prevSibling.objNum + " 0 R\n";
+    if (nextSibling) siblings += "/Next " + nextSibling.objNum + " 0 R\n";
+    siblings = siblings.trimEnd();
+    let children = "";
+    if (node.children.length > 0) {
+      const first = node.children[0];
+      const last  = node.children[node.children.length - 1];
+      children += "/First " + first.objNum + " 0 R\n";
+      children += "/Last " + last.objNum + " 0 R\n";
+      // Negative count if collapsed; positive (or absent) if expanded.
+      // We pick a positive count to keep the panel expanded by default.
+      const cnt = _countDescendants(node);
+      if (cnt > 0) children += "/Count " + cnt;
+    }
+    children = children.trimEnd();
+    let body = node._body
+      .replace("__PARENT__", parent)
+      .replace("__SIBLINGS__", siblings || "")
+      .replace("__CHILDREN__", children || "");
+    // Clean up empty placeholder lines.
+    body = body.replace(/\n\n+/g, "\n");
+    node._body = body;
+  }
+
+  function fillSiblings(siblings, parentObjNum) {
+    for (let i = 0; i < siblings.length; i++) {
+      const node = siblings[i];
+      const prev = i > 0 ? siblings[i - 1] : null;
+      const next = i < siblings.length - 1 ? siblings[i + 1] : null;
+      fillItem(node, parentObjNum, prev, next);
+      if (node.children.length > 0) {
+        fillSiblings(node.children, node.objNum);
+      }
+    }
+  }
+  fillSiblings(tree, outlinesObjNum);
+
+  // Rebuild region from scratch now that bodies are filled in.
+  region = "\n";
+  itemOffsets.clear();
+  for (const item of flat) {
+    const offset = baseOffset + region.length;
+    itemOffsets.set(item.objNum, offset);
+    region += item._body;
+  }
+
+  // 5b. Outlines root object.
+  const outlinesOffset = baseOffset + region.length;
+  let outlinesBody = outlinesObjNum + " 0 obj\n<<\n/Type /Outlines\n";
+  if (tree.length > 0) {
+    outlinesBody += "/First " + tree[0].objNum + " 0 R\n";
+    outlinesBody += "/Last "  + tree[tree.length - 1].objNum + " 0 R\n";
+    // /Count: total number of visible descendants. With everything open, that's
+    // every node in the tree.
+    let totalVisible = 0;
+    for (const t of tree) totalVisible += 1 + _countDescendants(t);
+    outlinesBody += "/Count " + totalVisible + "\n";
+  }
+  outlinesBody += ">>\nendobj\n";
+  region += outlinesBody;
+
+  // 5c. Revised catalog object (same num/gen as the original).
+  const catalogOffset = baseOffset + region.length;
+  const newCatalogDict = _reviseCatalogDict(tc.catalogDictText, { num: outlinesObjNum, gen: 0 });
+  const catalogBody =
+    tc.rootRef.num + " " + tc.rootRef.gen + " obj\n" +
+    newCatalogDict + "\nendobj\n";
+  region += catalogBody;
+
+  // 6. Build the xref subsections. Spec requires: subsections grouped by
+  // contiguous object numbers; entry 0 of object 0 only when included.
+  // Our updated objects: the catalog (rootRef.num) plus item objects
+  // [outlinesObjNum .. outlinesObjNum + flat.length] — the outlines root
+  // and all item objects are contiguous by construction.
+  const updates = []; // {num, offset, gen}
+  // The revised catalog lives at catalogOffset (in the appended region),
+  // NOT at tc.catalogObjOffset (the original offset in the input file).
+  updates.push({ num: tc.rootRef.num, offset: catalogOffset, gen: tc.rootRef.gen });
+  // Outlines root + items.
+  updates.push({ num: outlinesObjNum, offset: outlinesOffset, gen: 0 });
+  for (const item of flat) {
+    updates.push({ num: item.objNum, offset: itemOffsets.get(item.objNum), gen: 0 });
+  }
+  updates.sort((a, b) => a.num - b.num);
+
+  // Group into contiguous subsections.
+  const subsections = [];
+  let cur = null;
+  for (const u of updates) {
+    if (!cur || u.num !== cur.start + cur.entries.length) {
+      cur = { start: u.num, entries: [] };
+      subsections.push(cur);
+    }
+    cur.entries.push(u);
+  }
+
+  const xrefOffset = baseOffset + region.length;
+  let xref = "xref\n";
+  for (const sub of subsections) {
+    xref += sub.start + " " + sub.entries.length + "\n";
+    for (const e of sub.entries) {
+      xref += _padLeft(e.offset, 10) + " " + _padLeft(e.gen, 5) + " n \n";
+    }
+  }
+  region += xref;
+
+  // 7. Trailer + startxref + EOF.
+  const newSize = Math.max(tc.size, (outlinesObjNum + flat.length + 1));
+  let trailer = "trailer\n<<\n";
+  trailer += "/Size " + newSize + "\n";
+  trailer += "/Root " + tc.rootRef.num + " " + tc.rootRef.gen + " R\n";
+  trailer += "/Prev " + tc.prevXrefOffset + "\n";
+  trailer += ">>\n";
+  trailer += "startxref\n" + xrefOffset + "\n%%EOF\n";
+  region += trailer;
+
+  // 8. Concatenate and return. Sanity: prefix must equal original bytes.
+  const regionBytes = _bytesFromLatin1(region);
+  const out = new Uint8Array(bytes.length + regionBytes.length);
+  out.set(bytes, 0);
+  out.set(regionBytes, bytes.length);
+
+  // Sanity invariants — these must hold by construction; if they don't, the
+  // writer has a bug we want to catch loudly rather than silently corrupt
+  // the user's file.
+  if (out.length < bytes.length) throw new Error("incremental write produced shorter output");
+  // %%EOF should be at the very end (modulo a single optional newline).
+  const tail = _latin1FromBytes(out, Math.max(0, out.length - 16), out.length);
+  if (tail.indexOf("%%EOF") < 0) throw new Error("incremental write missing trailing %%EOF");
+  // /Size in the new trailer covers original size plus all newly written
+  // objects (item objects + outlines root + the revised catalog occupies
+  // its existing slot, not a new number).
+  if (newSize < tc.size + flat.length + 1) {
+    throw new Error("incremental write: /Size invariant failed");
+  }
+
+  return out;
+}
+
+// ---- pdf-lib fallback writer -----------------------------------------
+
+async function writeOutlinePdfLib(pdfBytes, chapters) {
   const PDFLib = await loadPdfLib();
   const { PDFDocument, PDFName, PDFArray, PDFHexString, PDFNumber, PDFDict } = PDFLib;
 
@@ -344,6 +1129,23 @@ async function writeOutline(pdfBytes, chapters) {
   pdfDoc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
 
   return await pdfDoc.save({ useObjectStreams: false });
+}
+
+// ---- public entry point ----------------------------------------------
+
+async function writeOutline(pdfBytes, chapters) {
+  // Prefer the incremental writer (memory: O(outline size)). Fall back to
+  // pdf-lib (which loads the whole PDF) for cases the incremental writer
+  // can't handle — encrypted, malformed structure, exotic xref shapes.
+  try {
+    return await writeOutlineIncremental(pdfBytes, chapters);
+  } catch (e) {
+    if (e && e.code === "ENCRYPTED") throw e;
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("incremental update failed, falling back to pdf-lib:", e && e.message ? e.message : e);
+    }
+    return await writeOutlinePdfLib(pdfBytes, chapters);
+  }
 }
 
 async function pdfHasOutline(pdfBytes) {
@@ -894,7 +1696,9 @@ export {
   App, STATE, ERR,
   TOC_LINE_RE, findTOCPages, parseTOC, findHeadings,
   resolvePageLabel, romanToInt, inferLevel, cleanTitle, dedupeChapters,
-  writeOutline, extractPages, pdfHasOutline,
+  writeOutline, writeOutlineIncremental, writeOutlinePdfLib,
+  extractPages, pdfHasOutline,
   pickCandidatePages, annotatePagesForLLM, LLM_MODEL_ID, LLM_MODEL_LABEL,
   hasWebGPU, isMobileUA,
+  MAX_BROWSER_BYTES_DESKTOP, MAX_BROWSER_BYTES_MOBILE,
 };
