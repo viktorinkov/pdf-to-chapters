@@ -447,6 +447,15 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   color: color-mix(in oklab, var(--ink) 78%, transparent);
   min-height: 1.4em;
 }
+.processing-actions {
+  margin: 12px 0 6px;
+  display: flex;
+  align-items: center;
+}
+.btn.small-btn {
+  font-size: 0.84rem;
+  padding: 6px 12px;
+}
 
 /* ---------- preview screen ---------- */
 .preview-head {

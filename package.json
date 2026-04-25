@@ -5,9 +5,11 @@
   "type": "module",
   "description": "Node-side smoke test for walnut's browser pipeline.",
   "scripts": {
-    "test:browser": "node scripts/test_browser.mjs"
+    "test:browser": "node scripts/test_browser.mjs",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "5.6.205"
   }

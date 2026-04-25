@@ -21,6 +21,8 @@ const ERR = Object.freeze({
   TOO_LARGE_MOBILE: "this file is over 20 MB. mobile browsers run out of memory on bigger PDFs; try a desktop browser or the desktop version.",
   WRITE_FAILED: "could not write the outline. the PDF may be malformed.",
   LOAD_FAILED: "this PDF could not be opened.",
+  MULTIPLE_FILES: "drop only one PDF at a time.",
+  NOT_PDF: "that doesn't look like a PDF. drop a .pdf file.",
 });
 
 function isMobileUA() {
@@ -69,15 +71,25 @@ function loadPdfLib() {
 
 // ---- text extraction ---------------------------------------------------
 
-async function extractPages(arrayBuffer, onProgress) {
+async function extractPages(arrayBuffer, onProgress, opts) {
   const pdfjs = await loadPdfJs();
   // Slice the buffer so pdf.js can transfer ownership safely.
   const loadingTask = pdfjs.getDocument({ data: arrayBuffer.slice(0) });
+  // Caller may want to cancel (e.g. user hit cancel during processing). We
+  // expose the loadingTask so handle() can call destroy() and abort the load.
+  if (opts && typeof opts.onLoadingTask === "function") {
+    try { opts.onLoadingTask(loadingTask); } catch (_) {}
+  }
   const doc = await loadingTask.promise;
   const total = doc.numPages;
   const pages = [];
   try {
     for (let i = 1; i <= total; i++) {
+      if (opts && typeof opts.shouldCancel === "function" && opts.shouldCancel()) {
+        const err = new Error("cancelled");
+        err.code = "CANCELLED";
+        throw err;
+      }
       const page = await doc.getPage(i);
       let content;
       try {
@@ -516,6 +528,7 @@ class App {
     this.alreadyBookmarked = false;
     this.bookmarkWarningShown = false;
     this.bind();
+    this.setState(STATE.IDLE);
   }
 
   bind() {
@@ -526,7 +539,9 @@ class App {
       dz.addEventListener("dragleave", e => { e.preventDefault(); dz.classList.remove("hover"); });
       dz.addEventListener("drop",      e => {
         e.preventDefault(); dz.classList.remove("hover");
-        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        const files = (e.dataTransfer && e.dataTransfer.files) || [];
+        if (files.length > 1) return this.fail("MULTIPLE_FILES");
+        const f = files[0];
         if (f) this.handle(f);
       });
       dz.addEventListener("click", () => fp.click());
@@ -537,16 +552,34 @@ class App {
         const f = e.target.files && e.target.files[0];
         if (f) this.handle(f);
       });
+
+      // Stop the browser from navigating away when a PDF is dropped on any
+      // part of the page that isn't the dropzone (default behaviour is to
+      // open the file in-place and lose the user's session).
+      const doc = this.root && this.root.ownerDocument;
+      if (doc && !doc.__walnutDragGuard) {
+        const win = doc.defaultView || (typeof window !== "undefined" ? window : null);
+        const guard = (e) => {
+          if (e.target && (e.target === dz || (typeof dz.contains === "function" && dz.contains(e.target)))) return;
+          e.preventDefault();
+          if (e.type === "drop" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+        };
+        const tgt = win || doc;
+        tgt.addEventListener("dragover", guard, false);
+        tgt.addEventListener("drop", guard, false);
+        doc.__walnutDragGuard = true;
+      }
     }
 
     const wire = (id, ev, fn) => {
       const el = this.q(id);
       if (el) el.addEventListener(ev, fn);
     };
-    wire("save-btn",  "click", () => this.confirm());
-    wire("retry-btn", "click", () => this.reset());
-    wire("again-btn", "click", () => this.reset());
-    wire("err-btn",   "click", () => this.reset());
+    wire("save-btn",   "click", () => this.confirm());
+    wire("retry-btn",  "click", () => this.reset());
+    wire("again-btn",  "click", () => this.reset());
+    wire("err-btn",    "click", () => this.reset());
+    wire("cancel-btn", "click", () => this.cancel());
 
     for (const btn of this.qAll("ai-preview-btn")) btn.addEventListener("click", () => this.runAI());
     for (const btn of this.qAll("ai-err-btn"))     btn.addEventListener("click", () => this.runAI());
@@ -699,14 +732,33 @@ class App {
   }
 
   reset() {
+    // If the user is mid-extraction, mirror cancel() side effects so we don't
+    // leak a worker or keep a stale loadingTask alive.
+    if (this.state === STATE.PROCESSING) this._abortInflight();
     this.fileName = null; this.pdfBytes = null; this.chapters = []; this.lastError = null;
     this.detectionMode = null;
     this.cachedPages = null;
     this.alreadyBookmarked = false;
     this.bookmarkWarningShown = false;
+    this._cancelled = false;
     const fp = this.q("filepicker");
     if (fp) fp.value = "";
     this.setState(STATE.IDLE);
+  }
+
+  cancel() {
+    if (this.state !== STATE.PROCESSING) return;
+    this._abortInflight();
+    this.reset();
+  }
+
+  _abortInflight() {
+    this._cancelled = true;
+    const lt = this._loadingTask;
+    this._loadingTask = null;
+    if (lt) {
+      try { lt.destroy && lt.destroy(); } catch (_) {}
+    }
   }
 
   async runAI() {
@@ -739,33 +791,46 @@ class App {
   }
 
   async handle(file) {
-    if (!/\.pdf$/i.test(file.name)) {
-      return this.fail("LOAD_FAILED", "this is not a .pdf file.");
+    // Front-load the cheap checks so the user sees an error instantly rather
+    // than after waiting for pdf.js (~1.7 MB) to download.
+    if (!file || !file.name || !/\.pdf$/i.test(file.name)) {
+      return this.fail("NOT_PDF");
     }
     const cap = isMobileUA() ? MAX_BROWSER_BYTES_MOBILE : MAX_BROWSER_BYTES_DESKTOP;
     if (file.size > cap) {
       return this.fail(isMobileUA() ? "TOO_LARGE_MOBILE" : "TOO_LARGE_DESKTOP");
     }
     this.fileName = file.name;
+    this._cancelled = false;
+    this._loadingTask = null;
     this.setState(STATE.PROCESSING, { pct: 4, status: "loading libraries…", filename: file.name });
     try {
       this.pdfBytes = await file.arrayBuffer();
+      if (this._cancelled) return;
       const head = new Uint8Array(this.pdfBytes, 0, 5);
       const headStr = String.fromCharCode(...head);
-      if (headStr !== "%PDF-") return this.fail("LOAD_FAILED", "not a PDF (bad magic).");
-    } catch (e) { return this.fail("LOAD_FAILED", e.message); }
+      if (headStr !== "%PDF-") return this.fail("NOT_PDF");
+    } catch (e) {
+      if (this._cancelled) return;
+      return this.fail("LOAD_FAILED", e.message);
+    }
 
     // Detect already-bookmarked PDFs and warn.
     try {
       this.alreadyBookmarked = await pdfHasOutline(this.pdfBytes);
     } catch (_) { this.alreadyBookmarked = false; }
+    if (this._cancelled) return;
 
     try {
       this.setState(STATE.PROCESSING, { pct: 10, status: "reading text…", filename: file.name });
       const { pages } = await extractPages(this.pdfBytes, (page, total) => {
         const pct = 10 + (page / total) * 60;
         this.setState(STATE.PROCESSING, { pct, status: `reading text · page ${page} / ${total}`, filename: file.name });
+      }, {
+        onLoadingTask: (lt) => { this._loadingTask = lt; },
+        shouldCancel: () => !!this._cancelled,
       });
+      if (this._cancelled) return;
       this.numPages = pages.length;
 
       const allText = pages.map(p => p.text).join("");
@@ -787,10 +852,13 @@ class App {
       this.chapters = chapters;
       this.setState(STATE.PREVIEW);
     } catch (e) {
+      if (this._cancelled || (e && e.code === "CANCELLED")) return;
       console.error(e);
       if (e && e.code === "ENCRYPTED") return this.fail("ENCRYPTED");
       if (e && /password|encrypt/i.test(e.message || "")) return this.fail("ENCRYPTED");
       this.fail("LOAD_FAILED", e.message);
+    } finally {
+      this._loadingTask = null;
     }
   }
 
