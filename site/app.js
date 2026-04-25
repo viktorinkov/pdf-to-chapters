@@ -1348,13 +1348,50 @@ async function pdfHasOutline(pdfBytes) {
 
 // ---- WebLLM fallback (in-browser Gemma) ------------------------------
 
-// As of April 2026, MLC's published model registry tops out at the Gemma-2
-// family for browser WebGPU builds; Gemma 4 ships in the desktop pipeline via
-// Ollama but is not yet packaged as MLC weights for the web runtime. So we
-// keep Gemma 2 here and surface that honestly to the user.
-const LLM_MODEL_ID = "gemma-2-2b-it-q4f16_1-MLC";
-const LLM_MODEL_LABEL = "Gemma 2 (browser version)";
-const LLM_APPROX_MB = 1500;
+// MLC's prebuilt registry tops out at the Gemma-2 family for browser WebGPU
+// builds as of April 2026; Gemma 4 ships in the desktop pipeline via Ollama
+// but is not yet packaged as MLC weights for the web runtime. The user picks
+// which size from the topbar dropdown — selection is persisted in
+// localStorage under "walnut.modelId".
+const LLM_MODELS = [
+  { id: "gemma-2-2b-it-q4f16_1-MLC", label: "Gemma 2 · 2B", sizeMB: 1500, sizeLabel: "1.5 GB" },
+  { id: "gemma-2-9b-it-q4f16_1-MLC", label: "Gemma 2 · 9B", sizeMB: 5300, sizeLabel: "5.3 GB" },
+];
+const LLM_DEFAULT_MODEL_ID = LLM_MODELS[0].id;
+
+let _currentModelId = (() => {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("walnut.modelId");
+      if (saved && LLM_MODELS.some((m) => m.id === saved)) return saved;
+    }
+  } catch (_) {}
+  return LLM_DEFAULT_MODEL_ID;
+})();
+
+function getCurrentModel() {
+  return LLM_MODELS.find((m) => m.id === _currentModelId) || LLM_MODELS[0];
+}
+
+function setCurrentModelId(id) {
+  if (id === _currentModelId) return false;
+  if (!LLM_MODELS.some((m) => m.id === id)) return false;
+  _currentModelId = id;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("walnut.modelId", id);
+    }
+  } catch (_) {}
+  // Reset the engine cache so the next AI run downloads/loads the new model.
+  webllmEnginePromise = null;
+  return true;
+}
+
+// Backwards-compat exports for tests that still reference the legacy single
+// model constants.
+const LLM_MODEL_ID = LLM_DEFAULT_MODEL_ID;
+const LLM_MODEL_LABEL = LLM_MODELS[0].label;
+const LLM_APPROX_MB = LLM_MODELS[0].sizeMB;
 
 const SYSTEM_PROMPT = `You are a document-structure analyzer. You extract a clean list of chapters and sections from extracted PDF text.
 
@@ -1403,7 +1440,7 @@ async function loadWebLLMEngine(onProgress) {
   if (webllmEnginePromise) return webllmEnginePromise;
   webllmEnginePromise = (async () => {
     const webllm = await loadWebLLMModule();
-    const engine = await webllm.CreateMLCEngine(LLM_MODEL_ID, {
+    const engine = await webllm.CreateMLCEngine(getCurrentModel().id, {
       initProgressCallback: (report) => {
         if (onProgress) onProgress(report);
       },
@@ -1584,18 +1621,40 @@ class App {
       for (const note of this.qAll("ai-unsupported")) note.classList.add("on");
     }
 
-    // Update the topbar WebGPU status pill if present.
-    const pill = this.root && this.root.ownerDocument
-      ? this.root.ownerDocument.querySelector('[data-walnut="webgpu-pill"]')
-      : null;
-    if (pill) {
-      if (hasWebGPU()) {
-        pill.classList.add("ok");
-        pill.textContent = "WebGPU: ready";
+    // Wire the topbar model picker.
+    const doc = this.root && this.root.ownerDocument;
+    const picker = doc ? doc.querySelector('[data-walnut="webgpu-pill"]') : null;
+    const select = doc ? doc.querySelector('[data-walnut="model-select"]') : null;
+    if (select) {
+      this._renderModelOptions(select);
+      if (!hasWebGPU()) {
+        select.disabled = true;
+        if (picker) picker.classList.add("bad");
       } else {
-        pill.classList.add("bad");
-        pill.textContent = "WebGPU: not available";
+        if (picker) picker.classList.add("ok");
+        select.addEventListener("change", (e) => {
+          setCurrentModelId(e.target.value);
+        });
       }
+    }
+  }
+
+  _renderModelOptions(select) {
+    const noWebGPU = !hasWebGPU();
+    select.textContent = "";
+    if (noWebGPU) {
+      const opt = document.createElement("option");
+      opt.textContent = "no WebGPU";
+      opt.value = "";
+      select.appendChild(opt);
+      return;
+    }
+    for (const m of LLM_MODELS) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = `${m.label}  ·  ${m.sizeLabel}`;
+      if (m.id === getCurrentModel().id) opt.selected = true;
+      select.appendChild(opt);
     }
   }
 
@@ -1629,7 +1688,7 @@ class App {
       const labels = {
         toc: "detected from a printed Table of Contents",
         headings: "detected from page headings",
-        llm: `detected by the local model (${LLM_MODEL_LABEL})`,
+        llm: `detected by the local model (${getCurrentModel().label})`,
       };
       const src = this.q("preview-source");
       if (src) src.textContent = labels[this.detectionMode] || "detected";
@@ -1758,7 +1817,7 @@ class App {
     }
     this.setState(STATE.PROCESSING, {
       pct: 4,
-      status: `loading the local model (${LLM_MODEL_LABEL}, ~${LLM_APPROX_MB} MB on first run)…`,
+      status: `loading the local model (${getCurrentModel().label}, ~${getCurrentModel().sizeMB} MB on first run)…`,
       filename: this.fileName,
     });
     try {

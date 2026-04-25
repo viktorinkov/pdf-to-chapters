@@ -74,11 +74,16 @@ test.describe("walnut e2e", () => {
     const filepicker = page.locator('input[data-walnut="filepicker"]');
     await expect(filepicker).toHaveCount(1);
 
-    // The pill starts with "WebGPU: checking..." and the app overwrites it on
-    // DOMContentLoaded with either "WebGPU: ready" or "WebGPU: not available".
+    // The topbar pill is now a Gemma model picker. After the App initialises
+    // it should show either a Gemma model name (when WebGPU is available) or
+    // "no WebGPU" (when it isn't).
     const pill = page.locator('[data-walnut="webgpu-pill"]');
     await expect(pill).toBeVisible();
-    await expect(pill).toHaveText(/WebGPU: (ready|not available)/, { timeout: 15_000 });
+    const select = page.locator('[data-walnut="model-select"]');
+    await expect(select).toBeVisible();
+    await expect(select).toHaveValue(/^(gemma-[\d.]+-\d+b-.+|)$/i, { timeout: 15_000 });
+    const selectedText = await select.locator(":checked").textContent();
+    expect(selectedText, `dropdown selected: ${selectedText}`).toMatch(/Gemma|no WebGPU/);
 
     // Give pdf.js / pdf-lib a beat to lazy-load anything that might warn, then
     // assert no console.error fired during load. (Warnings are fine.)
