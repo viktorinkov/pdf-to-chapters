@@ -1348,16 +1348,27 @@ async function pdfHasOutline(pdfBytes) {
 
 // ---- WebLLM fallback (in-browser Gemma) ------------------------------
 
-// MLC's prebuilt registry tops out at the Gemma-2 family for browser WebGPU
-// builds as of April 2026; Gemma 4 ships in the desktop pipeline via Ollama
-// but is not yet packaged as MLC weights for the web runtime. The user picks
-// which size from the topbar dropdown — selection is persisted in
-// localStorage under "walnut.modelId".
+// Browser-side Gemma options that MLC actually publishes WebGPU WASM for, as
+// of April 2026 (verified against
+// github.com/mlc-ai/binary-mlc-llm-libs/web-llm-models/v0_2_83/base). The
+// dropdown also surfaces Gemma 4 (E4B) as a non-selectable "desktop only"
+// row — Google released Gemma 4 on April 2 2026 but MLC hasn't compiled a
+// browser build yet, so advanced users who want it run the desktop tool
+// (Ollama + Gemma 4) instead. The dropdown labels the rows accordingly.
 const LLM_MODELS = [
-  { id: "gemma-2-2b-it-q4f16_1-MLC", label: "Gemma 2 · 2B", sizeMB: 1500, sizeLabel: "1.5 GB" },
-  { id: "gemma-2-9b-it-q4f16_1-MLC", label: "Gemma 2 · 9B", sizeMB: 5300, sizeLabel: "5.3 GB" },
+  { id: "gemma3-1b-it-q4f16_1-MLC",   label: "Gemma 3 · 1B", sizeMB: 700,  sizeLabel: "700 MB", note: "fast, small download" },
+  { id: "gemma-2-2b-it-q4f16_1-MLC",  label: "Gemma 2 · 2B", sizeMB: 1500, sizeLabel: "1.5 GB", note: "balanced default" },
+  { id: "gemma-2-9b-it-q4f16_1-MLC",  label: "Gemma 2 · 9B", sizeMB: 5300, sizeLabel: "5.3 GB", note: "best browser quality" },
 ];
-const LLM_DEFAULT_MODEL_ID = LLM_MODELS[0].id;
+// The current default — middle of the road between download size and quality.
+const LLM_DEFAULT_MODEL_ID = "gemma-2-2b-it-q4f16_1-MLC";
+
+// Gemma 4 isn't in MLC's prebuilt browser registry. Listed as informational
+// in the dropdown so advanced users know it exists and how to run it.
+const LLM_DESKTOP_ONLY = {
+  label: "Gemma 4 · E4B",
+  hint: "via Ollama (desktop)",
+};
 
 let _currentModelId = (() => {
   try {
@@ -1388,10 +1399,11 @@ function setCurrentModelId(id) {
 }
 
 // Backwards-compat exports for tests that still reference the legacy single
-// model constants.
+// model constants. These point at the current default (Gemma 2 · 2B).
 const LLM_MODEL_ID = LLM_DEFAULT_MODEL_ID;
-const LLM_MODEL_LABEL = LLM_MODELS[0].label;
-const LLM_APPROX_MB = LLM_MODELS[0].sizeMB;
+const _DEFAULT_MODEL_ENTRY = LLM_MODELS.find((m) => m.id === LLM_DEFAULT_MODEL_ID) || LLM_MODELS[0];
+const LLM_MODEL_LABEL = _DEFAULT_MODEL_ENTRY.label;
+const LLM_APPROX_MB = _DEFAULT_MODEL_ENTRY.sizeMB;
 
 const SYSTEM_PROMPT = `You are a document-structure analyzer. You extract a clean list of chapters and sections from extracted PDF text.
 
@@ -1649,13 +1661,28 @@ class App {
       select.appendChild(opt);
       return;
     }
+    // <optgroup label="browser"> — actually downloadable + runnable here.
+    const browserGroup = document.createElement("optgroup");
+    browserGroup.label = "browser";
     for (const m of LLM_MODELS) {
       const opt = document.createElement("option");
       opt.value = m.id;
       opt.textContent = `${m.label}  ·  ${m.sizeLabel}`;
       if (m.id === getCurrentModel().id) opt.selected = true;
-      select.appendChild(opt);
+      browserGroup.appendChild(opt);
     }
+    select.appendChild(browserGroup);
+    // <optgroup label="advanced"> — Gemma 4 is desktop-only via Ollama.
+    // Surfaced disabled so power users know the option exists and how to
+    // get it (the install section explains the desktop path).
+    const advancedGroup = document.createElement("optgroup");
+    advancedGroup.label = "advanced (desktop)";
+    const desktopOpt = document.createElement("option");
+    desktopOpt.value = "__desktop";
+    desktopOpt.disabled = true;
+    desktopOpt.textContent = `${LLM_DESKTOP_ONLY.label}  ·  ${LLM_DESKTOP_ONLY.hint}`;
+    advancedGroup.appendChild(desktopOpt);
+    select.appendChild(advancedGroup);
   }
 
   q(id) { return this.root.querySelector(`[data-walnut="${id}"]`); }
