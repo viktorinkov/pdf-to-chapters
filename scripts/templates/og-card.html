@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>walnut og</title>
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@500&display=swap");
+  :root {
+    --ink:    #2a1f17;
+    --paper:  #f7f3ec;
+    --shell:  #e8e0d2;
+    --bark:   #6b4a2b;
+    --hairline: #d8cdb8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .og {
+    width: 1200px; height: 630px;
+    padding: 78px 96px 76px;
+    position: relative;
+    overflow: hidden;
+  }
+  .corner {
+    position: absolute;
+    top: 56px; right: 96px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 18px;
+    color: var(--bark);
+    opacity: 0.62;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .brand {
+    font-family: Fraunces, serif;
+    font-weight: 500;
+    font-size: 232px;
+    letter-spacing: -0.026em;
+    line-height: 0.96;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.06em;
+  }
+  .brand .dot {
+    display: inline-block;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--bark);
+    transform: translateY(-0.06em);
+    flex-shrink: 0;
+  }
+  .tagline {
+    font-family: Fraunces, serif;
+    font-weight: 400;
+    font-size: 50px;
+    line-height: 1.18;
+    margin-top: 28px;
+    max-width: 940px;
+    color: var(--ink);
+    opacity: 0.86;
+  }
+  .tagline .accent { color: var(--bark); }
+  .url {
+    position: absolute;
+    bottom: 56px; right: 96px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 22px;
+    color: var(--bark);
+  }
+  .author {
+    position: absolute;
+    bottom: 60px; left: 96px;
+    font-family: Inter, sans-serif;
+    font-size: 22px;
+    color: var(--ink);
+    opacity: 0.62;
+  }
+  .author strong { font-weight: 500; opacity: 1; color: var(--ink); }
+</style>
+</head>
+<body>
+  <div class="og">
+    <div class="corner">free &middot; open source &middot; no cloud</div>
+    <div class="brand">walnut<span class="dot"></span></div>
+    <div class="tagline">chapter bookmarks for PDFs &mdash;<br><span class="accent">in your browser, locally.</span></div>
+    <div class="author">built by <strong>Viktor Minchev</strong></div>
+    <div class="url">viktorinkov.github.io/pdf-to-chapters</div>
+  </div>
+</body>
+</html>
