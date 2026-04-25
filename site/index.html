@@ -288,20 +288,38 @@ uvx --from git+https://github.com/viktorinkov/pdf-to-chapters walnut</code></pre
   <!-- Reveal-on-scroll for the existing landing animations. -->
   <script>
     (function () {
-      var io;
-      if ("IntersectionObserver" in window) {
-        io = new IntersectionObserver(function (entries) {
-          entries.forEach(function (e) {
-            if (e.isIntersecting) {
-              e.target.classList.add("in");
-              io.unobserve(e.target);
-            }
-          });
-        }, { rootMargin: "-8% 0px -8% 0px", threshold: 0.05 });
-        document.querySelectorAll(".reveal, .step").forEach(function (el) { io.observe(el); });
-      } else {
-        document.querySelectorAll(".reveal, .step").forEach(function (el) { el.classList.add("in"); });
-      }
+      var els = document.querySelectorAll(".reveal, .step");
+      // Failsafe: if anything is still hidden after 1.5s (no IO support, no
+      // scroll, slow paint), force it visible. Better a missing animation
+      // than a section showing as an empty bordered rectangle.
+      var failsafe = setTimeout(function () {
+        els.forEach(function (el) { el.classList.add("in"); });
+      }, 1500);
+      if (!("IntersectionObserver" in window)) return;
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) {
+            e.target.classList.add("in");
+            io.unobserve(e.target);
+          }
+        });
+      // Big positive rootMargin so reveals trigger as soon as the user
+      // starts scrolling near the section, not only when it's centered.
+      // Previous "-8% 0px -8% 0px" actually shrunk the trigger area and
+      // left below-the-fold cards rendering as empty bordered squares
+      // until the user scrolled exactly onto them.
+      }, { rootMargin: "300px 0px 300px 0px", threshold: 0 });
+      els.forEach(function (el) { io.observe(el); });
+      // Once the IO has had a chance to register everything visible at
+      // initial paint, drop the failsafe earlier — keeps the animation
+      // intact for cards already in viewport.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (document.querySelectorAll(".reveal:not(.in), .step:not(.in)").length === 0) {
+            clearTimeout(failsafe);
+          }
+        });
+      });
     })();
   </script>
 
