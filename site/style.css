@@ -124,17 +124,17 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
 .reveal-line {
   display: block;
   overflow: hidden;
-  /* h1.display runs at line-height: 1.05 for tight typography, but descenders
-     ("y" in "your", "p" in "chapter") sit below the line box and get clipped
-     by overflow: hidden. Pad the bottom of each line so descenders have
-     room, then claw the space back with a matching negative margin so the
-     vertical rhythm is unchanged. */
-  padding-bottom: 0.18em;
-  margin-bottom: -0.18em;
+  /* Fraunces has unusually deep descenders (~0.30em below baseline). With
+     line-height: 1.05, the 'y' in "your" and 'p' in "chapter" extend ~0.20em
+     below the line's content box and get clipped by overflow: hidden. Pad
+     the box bottom so the clip rectangle covers the descender. The slide-up
+     animation start (translateY) is bumped accordingly so the span stays
+     fully hidden past the now-larger box. */
+  padding-bottom: 0.32em;
 }
 .reveal-line > span {
   display: inline-block;
-  transform: translateY(110%);
+  transform: translateY(150%);
   animation: line-rise 700ms cubic-bezier(.2,.7,.2,1) both;
 }
 .reveal-line:nth-child(1) > span { animation-delay: 80ms; }
@@ -289,7 +289,7 @@ h3 { font-size: 1.15rem; margin: 0 0 0.4rem; }
   50%      { transform: translateY(-1px) scale(0.78); opacity: 0.55;}
 }
 @keyframes line-rise {
-  from { transform: translateY(110%); }
+  from { transform: translateY(150%); }
   to   { transform: translateY(0); }
 }
 @keyframes arrow-in {
